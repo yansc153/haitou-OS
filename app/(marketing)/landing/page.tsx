@@ -285,14 +285,14 @@ export default function LandingPage() {
           <div className="flex gap-12 text-xs text-muted-foreground">
             <div className="space-y-2">
               <p className="font-semibold text-foreground uppercase tracking-widest text-[10px] font-label">Product</p>
-              <a href="#" className="block hover:text-foreground transition-colors">Team Agents</a>
-              <a href="#" className="block hover:text-foreground transition-colors">Platforms</a>
-              <a href="#" className="block hover:text-foreground transition-colors">Pricing</a>
+              <a href="/activation" className="block hover:text-foreground transition-colors">Team Agents</a>
+              <a href="/platforms" className="block hover:text-foreground transition-colors">Platforms</a>
+              <a href="/billing" className="block hover:text-foreground transition-colors">Pricing</a>
             </div>
             <div className="space-y-2">
               <p className="font-semibold text-foreground uppercase tracking-widest text-[10px] font-label">Legal</p>
-              <a href="#" className="block hover:text-foreground transition-colors">隐私政策</a>
-              <a href="#" className="block hover:text-foreground transition-colors">服务条款</a>
+              <a href="/legal/privacy" className="block hover:text-foreground transition-colors">隐私政策</a>
+              <a href="/legal/terms" className="block hover:text-foreground transition-colors">服务条款</a>
             </div>
           </div>
         </div>

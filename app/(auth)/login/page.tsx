@@ -81,9 +81,9 @@ export default function LoginPage() {
 
               <p className="text-sm text-muted-foreground">
                 登录即表示同意
-                <a href="#" className="underline hover:text-foreground ml-1">服务条款</a>
+                <a href="/legal/terms" className="underline hover:text-foreground ml-1">服务条款</a>
                 {' '}和{' '}
-                <a href="#" className="underline hover:text-foreground">隐私政策</a>
+                <a href="/legal/privacy" className="underline hover:text-foreground">隐私政策</a>
               </p>
             </div>
           </div>

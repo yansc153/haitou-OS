@@ -5,6 +5,7 @@ const PUBLIC_PATHS = ['/login', '/auth/callback', '/landing', '/preview',
   // Dev preview: allow all app pages without auth
   '/home', '/opportunities', '/handoffs', '/platforms', '/billing', '/settings',
   '/activation', '/readiness', '/resume', '/questions', '/complete',
+  '/legal',
 ];
 
 export async function middleware(request: NextRequest) {

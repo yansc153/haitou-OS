@@ -257,7 +257,12 @@ export default function HandoffsPage() {
                 >
                   跳过此项
                 </button>
-                <button className="px-8 py-3 bg-foreground text-background rounded-xl text-sm font-bold hover:opacity-90 transition-opacity">
+                <button
+                  onClick={() => {
+                    alert('已接管: ' + selected.title + '\n\n系统将暂停自动化处理此事项，等待你的操作。');
+                  }}
+                  className="px-8 py-3 bg-foreground text-background rounded-xl text-sm font-bold hover:opacity-90 transition-opacity"
+                >
                   执行接管
                 </button>
               </div>

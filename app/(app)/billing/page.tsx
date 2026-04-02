@@ -61,9 +61,15 @@ export default function BillingPage() {
                   </li>
                 ))}
               </ul>
-              <button className={`w-full py-3 rounded-xl text-sm font-bold transition-all ${
-                plan.hl ? 'bg-foreground text-background hover:opacity-90' : 'bg-surface-low hover:bg-border/40'
-              }`}>
+              <button
+                onClick={() => {
+                  if (plan.hl) return;
+                  alert(`升级到 ${plan.name} (${plan.zh})\n\n${plan.runtime}\n价格: ${plan.price}/月\n\n支付功能即将上线，敬请期待。`);
+                }}
+                className={`w-full py-3 rounded-xl text-sm font-bold transition-all ${
+                  plan.hl ? 'bg-foreground text-background cursor-default' : 'bg-surface-low hover:bg-border/40 cursor-pointer'
+                }`}
+              >
                 {plan.hl ? '当前方案' : `升级到 ${plan.name}`}
               </button>
             </div>

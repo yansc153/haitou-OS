@@ -72,9 +72,9 @@ export default function TeamHomePage() {
         <div>
           <div className="flex items-center justify-between mb-5">
             <h2 className="text-xl font-display font-bold">实时动态</h2>
-            <button className="text-xs text-muted-foreground hover:text-foreground transition-colors font-label uppercase tracking-wider">
+            <a href="/opportunities" className="text-xs text-muted-foreground hover:text-foreground transition-colors font-label uppercase tracking-wider">
               查看全部日志 →
-            </button>
+            </a>
           </div>
 
           <div className="space-y-3">
@@ -89,7 +89,7 @@ export default function TeamHomePage() {
                   {item.actions.length > 0 && (
                     <div className="flex gap-2 mt-3">
                       {item.actions.map(a => (
-                        <button key={a} className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-surface-low hover:bg-border/40 transition-colors">
+                        <button key={a} onClick={() => window.location.href = '/opportunities'} className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-surface-low hover:bg-border/40 transition-colors">
                           {a}
                         </button>
                       ))}
@@ -116,9 +116,9 @@ export default function TeamHomePage() {
                     <p className="text-[10px] font-label uppercase tracking-widest text-muted-foreground mb-1">{h.type}</p>
                     <p className="text-sm font-semibold mb-0.5">{h.title}</p>
                     <p className="text-xs text-muted-foreground mb-2">{h.desc}</p>
-                    <button className="px-4 py-2 text-xs font-semibold rounded-lg bg-surface-low hover:bg-border/40 transition-colors w-full">
+                    <a href="/handoffs" className="block px-4 py-2 text-xs font-semibold rounded-lg bg-surface-low hover:bg-border/40 transition-colors w-full text-center">
                       {h.action}
-                    </button>
+                    </a>
                   </div>
                 ))}
               </div>
@@ -130,7 +130,7 @@ export default function TeamHomePage() {
             <h3 className="text-base font-display font-bold mb-3">重点机会</h3>
             <div className="space-y-3">
               {MOCK_OPPORTUNITIES.map((opp, i) => (
-                <SpotlightCard key={i} className="surface-card p-5">
+                <SpotlightCard key={i} className="surface-card p-5 cursor-pointer" onClick={() => window.location.href = '/opportunities'}>
                   <div className="flex items-start justify-between">
                     <div>
                       <h4 className="text-sm font-bold">{opp.title}</h4>

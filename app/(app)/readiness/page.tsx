@@ -60,7 +60,7 @@ export default function ReadinessPage() {
               <SpotlightCard className="surface-card p-6 mt-4">
                 <div className="flex items-start justify-between">
                   <div><h3 className="text-base font-bold mb-1">自动填充偏好</h3><p className="text-xs text-muted-foreground">期望薪资、入职时间等</p></div>
-                  <button className="text-xs text-secondary font-semibold hover:underline">编辑详情</button>
+                  <a href="/settings" className="text-xs text-secondary font-semibold hover:underline">编辑详情</a>
                 </div>
                 <input type="text" placeholder="期望薪资（选填）" value={salary} onChange={(e) => setSalary(e.target.value)} className="w-full mt-4 px-4 py-3 text-sm bg-surface-low rounded-xl border-0 focus:outline-none focus:ring-2 focus:ring-secondary" />
               </SpotlightCard>
@@ -83,7 +83,10 @@ export default function ReadinessPage() {
                       </span>
                     </div>
                     {p.status !== 'connected' && (
-                      <button className="w-full py-2 text-xs font-semibold rounded-lg bg-surface-low hover:bg-border/40 transition-colors">
+                      <button
+                        onClick={() => alert('请使用浏览器扩展导出 Cookie 来连接 ' + p.name + '。\n\n安装扩展后，登录平台，点击 Export 按钮。')}
+                        className="w-full py-2 text-xs font-semibold rounded-lg bg-surface-low hover:bg-border/40 transition-colors"
+                      >
                         {p.status === 'needs_auth' ? '重新认证' : '连接'}
                       </button>
                     )}
