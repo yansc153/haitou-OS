@@ -34,13 +34,13 @@ export default function LoginPage() {
       {/* Centered login */}
       <div className="flex-1 flex items-center justify-center px-6">
         <AnimatedContent>
-          <div className="w-full max-w-lg text-center">
-            {/* Title — large, no icon */}
-            <h1 className="text-4xl lg:text-5xl font-display font-extrabold leading-tight mb-4">
+          <div className="w-full max-w-xl text-center">
+            {/* Title — one line, very large */}
+            <h1 className="text-5xl lg:text-[56px] font-display font-extrabold leading-none mb-4 whitespace-nowrap">
               拥有你的 AI 求职运营团队
             </h1>
-            <p className="text-lg text-muted-foreground mb-12">
-              登录以组建你的专属 7 人运营团队
+            <p className="text-lg text-muted-foreground mb-14">
+              登录以组建你的专属运营团队
             </p>
 
             {/* OAuth card */}

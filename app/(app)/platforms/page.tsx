@@ -20,19 +20,34 @@ type PlatformEntry = {
   connection_id: string | null; connection_status: string; capability_status: Record<string, string> | null;
 };
 
+const MOCK_PLATFORMS: { global_english: PlatformEntry[]; china: PlatformEntry[] } = {
+  global_english: [
+    { platform_id: '1', code: 'linkedin', display_name: 'LinkedIn', display_name_zh: '领英', pipeline_mode: 'full_tailored', anti_scraping_level: 'high', min_plan_tier: 'free', connection_id: null, connection_status: 'available_unconnected', capability_status: null },
+    { platform_id: '2', code: 'greenhouse', display_name: 'Greenhouse', display_name_zh: 'Greenhouse', pipeline_mode: 'full_tailored', anti_scraping_level: 'low', min_plan_tier: 'free', connection_id: null, connection_status: 'available_unconnected', capability_status: null },
+    { platform_id: '3', code: 'lever', display_name: 'Lever', display_name_zh: 'Lever', pipeline_mode: 'full_tailored', anti_scraping_level: 'low', min_plan_tier: 'free', connection_id: null, connection_status: 'available_unconnected', capability_status: null },
+  ],
+  china: [
+    { platform_id: '4', code: 'zhaopin', display_name: 'Zhaopin', display_name_zh: '智联招聘', pipeline_mode: 'passthrough', anti_scraping_level: 'low', min_plan_tier: 'pro', connection_id: null, connection_status: 'available_unconnected', capability_status: null },
+    { platform_id: '5', code: 'lagou', display_name: 'Lagou', display_name_zh: '拉勾', pipeline_mode: 'passthrough', anti_scraping_level: 'medium', min_plan_tier: 'pro', connection_id: null, connection_status: 'available_unconnected', capability_status: null },
+    { platform_id: '6', code: 'boss_zhipin', display_name: 'Boss Zhipin', display_name_zh: 'Boss直聘', pipeline_mode: 'passthrough', anti_scraping_level: 'extreme', min_plan_tier: 'pro', connection_id: null, connection_status: 'available_unconnected', capability_status: null },
+  ],
+};
+
 export default function PlatformsPage() {
-  const [groups, setGroups] = useState<{ global_english: PlatformEntry[]; china: PlatformEntry[] } | null>(null);
-  const supabase = createClient();
+  const [groups, setGroups] = useState<{ global_english: PlatformEntry[]; china: PlatformEntry[] }>(MOCK_PLATFORMS);
+  const supabase = useMemo(() => createClient(), []);
 
   useEffect(() => {
     async function load() {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return;
-      const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/platforms-list`, {
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      });
-      const json = await res.json();
-      if (json.data) setGroups(json.data);
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+        const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/platforms-list`, {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        const json = await res.json();
+        if (json.data) setGroups(json.data);
+      } catch { /* use mock data */ }
     }
     load();
   }, [supabase]);
@@ -42,8 +57,7 @@ export default function PlatformsPage() {
       <h1 className="text-4xl font-display font-extrabold tracking-tight mb-2">平台中心</h1>
       <p className="text-sm text-muted-foreground mb-10">管理你的招聘平台连接状态和运行健康度</p>
 
-      {groups && (
-        <div className="space-y-12">
+      <div className="space-y-12">
           <PlatformGroup
             title="英文平台"
             subtitle="full_tailored · 简历定制 + 求职信 + 自动投递"
@@ -55,18 +69,6 @@ export default function PlatformsPage() {
             platforms={groups.china}
           />
         </div>
-      )}
-
-      {!groups && (
-        <div className="space-y-4">
-          {[1, 2, 3].map(i => (
-            <div key={i} className="surface-card p-6 animate-pulse">
-              <div className="h-5 w-32 bg-surface-low rounded mb-3" />
-              <div className="h-3 w-48 bg-surface-low rounded" />
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

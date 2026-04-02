@@ -1,164 +1,139 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
 import { AnimatedContent } from '@/components/ui/animated-content';
 import { SpotlightCard } from '@/components/ui/spotlight-card';
-import Link from 'next/link';
+import { PIXEL_AVATARS } from '@/components/agents/pixel-avatars';
 
-type ReadinessData = {
-  execution_readiness: string;
-  platform_tasks: Array<{ platform_id: string; platform_name: string; status: string; action_required: string | null }>;
-  blocking_items: string[];
-  non_blocking_items: string[];
-};
+const PLATFORMS = [
+  { code: 'boss_zhipin', name: 'Boss 直聘', status: 'connected' as const },
+  { code: 'linkedin', name: 'LinkedIn · 领英', status: 'needs_auth' as const },
+  { code: 'lagou', name: '拉勾', status: 'disconnected' as const },
+  { code: 'zhaopin', name: '智联招聘', status: 'disconnected' as const },
+  { code: 'greenhouse', name: 'Greenhouse', status: 'disconnected' as const },
+  { code: 'lever', name: 'Lever', status: 'disconnected' as const },
+];
 
 export default function ReadinessPage() {
-  const [data, setData] = useState<ReadinessData | null>(null);
+  const [contactEmail, setContactEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [salary, setSalary] = useState('');
   const [starting, setStarting] = useState(false);
   const router = useRouter();
-  const supabase = useMemo(() => createClient(), []);
+  const ScoutAvatar = PIXEL_AVATARS['opportunity_research'];
 
-  useEffect(() => {
-    async function load() {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return;
-      const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/readiness-get`, {
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      });
-      const json = await res.json();
-      if (json.data) setData(json.data);
-    }
-    load();
-  }, [supabase]);
-
-  if (!data) {
-    // Fallback: show skeleton/demo content when API unavailable
-    return (
-      <div className="max-w-2xl mx-auto">
-        <h1 className="text-4xl font-display font-extrabold tracking-tight mb-2">就绪检查</h1>
-        <p className="text-sm text-muted-foreground mb-8">确保所有条件满足后启动团队</p>
-        <div className="surface-card p-6 mb-8 ring-1 ring-status-warning/30">
-          <div className="flex items-center gap-3">
-            <div className="w-4 h-4 rounded-full bg-status-warning" />
-            <span className="text-lg font-display font-bold">请完成以下事项</span>
-          </div>
-        </div>
-        <div className="space-y-2 mb-6">
-          {['连接至少一个招聘平台', '补充投递资料（手机、邮箱）'].map((item, i) => (
-            <div key={i} className="surface-card p-4 flex items-center gap-3">
-              <span className="text-destructive text-sm">✗</span>
-              <span className="text-sm">{item}</span>
-            </div>
-          ))}
-        </div>
-        <button disabled className="w-full py-4 bg-foreground text-background rounded-2xl text-lg font-display font-bold opacity-30 cursor-not-allowed">
-          启动团队
-        </button>
-        <p className="text-xs text-muted-foreground mt-3 text-center">完成所有必须项后可启动</p>
-      </div>
-    );
-  }
-
-  const isReady = data.blocking_items.length === 0;
+  const profileComplete = contactEmail.length > 0 && phone.length > 0;
+  const hasConnectedPlatform = PLATFORMS.some(p => p.status === 'connected');
+  const canStart = profileComplete && hasConnectedPlatform;
 
   return (
-    <div className="max-w-2xl mx-auto">
-      <h1 className="text-4xl font-display font-extrabold tracking-tight mb-2">就绪检查</h1>
-      <p className="text-sm text-muted-foreground mb-8">确保所有条件满足后启动团队</p>
-
-      {/* Status Banner */}
-      <AnimatedContent>
-        <div className={`surface-card p-6 mb-8 ${isReady ? 'ring-1 ring-status-active/30' : 'ring-1 ring-status-warning/30'}`}>
-          <div className="flex items-center gap-3">
-            <div className={`w-4 h-4 rounded-full ${isReady ? 'bg-status-active' : 'bg-status-warning'}`} />
-            <span className="text-lg font-display font-bold">
-              {isReady ? '团队已准备就绪' : '请完成以下事项'}
-            </span>
-          </div>
-        </div>
-      </AnimatedContent>
-
-      {/* Blocking */}
-      {data.blocking_items.length > 0 && (
-        <div className="mb-6">
-          <h2 className="text-sm font-bold text-destructive mb-3">必须完成</h2>
-          <div className="space-y-2">
-            {data.blocking_items.map((item, i) => (
-              <AnimatedContent key={i} delay={i * 0.05}>
-                <div className="surface-card p-4 flex items-center gap-3">
-                  <span className="text-destructive text-sm">✗</span>
-                  <span className="text-sm">{item}</span>
-                </div>
-              </AnimatedContent>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Non-blocking */}
-      {data.non_blocking_items.length > 0 && (
-        <div className="mb-6">
-          <h2 className="text-sm font-bold text-status-warning mb-3">建议完善</h2>
-          <div className="space-y-2">
-            {data.non_blocking_items.map((item, i) => (
-              <AnimatedContent key={i} delay={i * 0.05}>
-                <div className="surface-card p-4 flex items-center gap-3">
-                  <span className="text-status-warning text-sm">△</span>
-                  <span className="text-sm text-muted-foreground">{item}</span>
-                </div>
-              </AnimatedContent>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Platform shortcuts */}
-      <div className="mb-8">
-        <h2 className="text-sm font-bold mb-3">平台连接</h2>
-        <div className="grid grid-cols-2 gap-3">
-          {data.platform_tasks.slice(0, 4).map(p => (
-            <SpotlightCard key={p.platform_id} className="surface-card p-4">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-semibold">{p.platform_name}</span>
-                {p.action_required ? (
-                  <Link href="/platforms" className="px-3 py-1 bg-foreground text-background rounded-lg text-xs font-bold">
-                    {p.action_required === 'connect' ? '连接' : '重连'}
-                  </Link>
-                ) : (
-                  <span className="text-xs text-status-active font-semibold">✓ 已连接</span>
-                )}
-              </div>
-            </SpotlightCard>
-          ))}
-        </div>
+    <div>
+      <div className="mb-10">
+        <h1 className="text-4xl font-display font-extrabold tracking-tight">就绪检查</h1>
+        <p className="text-base text-muted-foreground mt-2">确认身份档案和平台连接，确保团队拥有开始运营所需的一切。</p>
       </div>
 
-      {/* Start button */}
-      <button
-        disabled={!isReady || starting}
-        onClick={async () => {
-          setStarting(true);
-          const { data: { session } } = await supabase.auth.getSession();
-          if (!session) { setStarting(false); return; }
-          const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/team-start`, {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
-          });
-          if (res.ok) {
-            router.push('/home');
-          } else {
-            const json = await res.json();
-            alert(json.error?.message || '启动失败');
-            setStarting(false);
-          }
-        }}
-        className="w-full py-4 bg-foreground text-background rounded-2xl text-lg font-display font-bold hover:opacity-90 transition-opacity disabled:opacity-30 disabled:cursor-not-allowed"
-      >
-        {starting ? '启动中...' : '启动团队'}
-      </button>
-      {!isReady && <p className="text-xs text-muted-foreground mt-3 text-center">完成所有必须项后可启动</p>}
+      <div className="grid lg:grid-cols-[1fr_360px] gap-8">
+        <div className="space-y-10">
+          {/* Step 01 */}
+          <AnimatedContent>
+            <div>
+              <p className="text-xs font-label uppercase tracking-[0.2em] text-muted-foreground mb-4">STEP 01</p>
+              <h2 className="text-2xl font-display font-bold mb-6">身份档案</h2>
+              <div className="grid md:grid-cols-2 gap-4">
+                <SpotlightCard className="surface-card p-6">
+                  <h3 className="text-base font-bold mb-1">联系方式</h3>
+                  <p className="text-xs text-muted-foreground mb-4">平台通知和面试联系</p>
+                  <input type="email" placeholder="your@email.com" value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} className="w-full px-4 py-3 text-sm bg-surface-low rounded-xl border-0 focus:outline-none focus:ring-2 focus:ring-secondary mb-3" />
+                  <input type="tel" placeholder="+86 138 0000 0000" value={phone} onChange={(e) => setPhone(e.target.value)} className="w-full px-4 py-3 text-sm bg-surface-low rounded-xl border-0 focus:outline-none focus:ring-2 focus:ring-secondary" />
+                </SpotlightCard>
+                <SpotlightCard className="surface-card p-6">
+                  <h3 className="text-base font-bold mb-1">电子简历</h3>
+                  <p className="text-xs text-muted-foreground mb-4">已上传的简历</p>
+                  <div className="flex items-center gap-3 p-3 bg-surface-low rounded-xl">
+                    <span className="text-lg">📄</span>
+                    <div><p className="text-sm font-semibold">Resume_2026.pdf</p><p className="text-xs text-muted-foreground">已就绪</p></div>
+                  </div>
+                </SpotlightCard>
+              </div>
+              <SpotlightCard className="surface-card p-6 mt-4">
+                <div className="flex items-start justify-between">
+                  <div><h3 className="text-base font-bold mb-1">自动填充偏好</h3><p className="text-xs text-muted-foreground">期望薪资、入职时间等</p></div>
+                  <button className="text-xs text-secondary font-semibold hover:underline">编辑详情</button>
+                </div>
+                <input type="text" placeholder="期望薪资（选填）" value={salary} onChange={(e) => setSalary(e.target.value)} className="w-full mt-4 px-4 py-3 text-sm bg-surface-low rounded-xl border-0 focus:outline-none focus:ring-2 focus:ring-secondary" />
+              </SpotlightCard>
+            </div>
+          </AnimatedContent>
+
+          {/* Step 02 */}
+          <AnimatedContent delay={0.15}>
+            <div>
+              <p className="text-xs font-label uppercase tracking-[0.2em] text-muted-foreground mb-4">STEP 02</p>
+              <h2 className="text-2xl font-display font-bold mb-6">平台连接</h2>
+              <div className="grid md:grid-cols-3 gap-4">
+                {PLATFORMS.map(p => (
+                  <SpotlightCard key={p.code} className="surface-card p-5">
+                    <h4 className="text-sm font-bold mb-3">{p.name}</h4>
+                    <div className="flex items-center gap-2 mb-3">
+                      <div className={`w-2 h-2 rounded-full ${p.status === 'connected' ? 'bg-status-active' : p.status === 'needs_auth' ? 'bg-status-warning' : 'bg-muted-foreground/30'}`} />
+                      <span className={`text-xs font-semibold ${p.status === 'connected' ? 'text-status-active' : p.status === 'needs_auth' ? 'text-status-warning' : 'text-muted-foreground'}`}>
+                        {p.status === 'connected' ? '已连接' : p.status === 'needs_auth' ? '需重新认证' : '未连接'}
+                      </span>
+                    </div>
+                    {p.status !== 'connected' && (
+                      <button className="w-full py-2 text-xs font-semibold rounded-lg bg-surface-low hover:bg-border/40 transition-colors">
+                        {p.status === 'needs_auth' ? '重新认证' : '连接'}
+                      </button>
+                    )}
+                  </SpotlightCard>
+                ))}
+              </div>
+            </div>
+          </AnimatedContent>
+        </div>
+
+        {/* Right sidebar */}
+        <AnimatedContent delay={0.2} direction="right">
+          <div className="sticky top-20 space-y-5">
+            <div className="surface-card p-6 rounded-2xl">
+              <h3 className="text-lg font-display font-bold mb-4">启动协议</h3>
+              <div className="space-y-3 mb-6">
+                {[
+                  { done: true, label: '简历已上传并解析' },
+                  { done: profileComplete, label: '联系方式已填写' },
+                  { done: true, label: '7 位专员已分配' },
+                  { done: hasConnectedPlatform, label: '至少连接一个平台' },
+                ].map((item, i) => (
+                  <div key={i} className="flex items-center gap-3">
+                    <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] ${item.done ? 'bg-status-active/10 text-status-active' : 'bg-muted-foreground/10 text-muted-foreground/40'}`}>
+                      {item.done ? '✓' : '○'}
+                    </div>
+                    <span className={`text-sm ${item.done ? 'font-medium' : 'text-muted-foreground'}`}>{item.label}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="h-px bg-border/20 mb-4" />
+              <p className="text-[10px] font-label uppercase tracking-widest text-muted-foreground mb-1">运营模式</p>
+              <p className="text-sm font-semibold mb-6">专业运营 · 全自动执行</p>
+              <button
+                onClick={() => { setStarting(true); router.push('/home'); }}
+                disabled={!canStart || starting}
+                className="w-full py-3.5 bg-foreground text-background rounded-xl text-base font-bold hover:opacity-90 transition-opacity disabled:opacity-30"
+              >
+                {starting ? '启动中...' : '启动团队 | 开始运营'}
+              </button>
+            </div>
+            <div className="surface-card p-5 rounded-2xl">
+              <div className="flex items-center gap-3">
+                {ScoutAvatar && <ScoutAvatar size={40} />}
+                <div><p className="text-sm font-bold">岗位研究员</p><p className="text-xs text-muted-foreground">等待部署</p></div>
+              </div>
+            </div>
+          </div>
+        </AnimatedContent>
+      </div>
     </div>
   );
 }
