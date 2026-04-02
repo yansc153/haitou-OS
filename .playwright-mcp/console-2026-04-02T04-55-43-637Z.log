@@ -1,0 +1,45 @@
+[    1068ms] Error: Minified React error #425; visit https://reactjs.org/docs/error-decoder.html?invariant=425 for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
+    at rh (https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:9:40165)
+    at https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:9:103466
+    at oD (https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:9:106216)
+    at oO (https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:9:99164)
+    at https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:9:98971
+    at oF (https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:9:98978)
+    at oS (https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:9:94017)
+    at x (https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:33:1364)
+    at MessagePort.T (https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:33:1894)
+[    1070ms] Error: Minified React error #418; visit https://reactjs.org/docs/error-decoder.html?invariant=418 for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
+    at lh (https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:9:46418)
+    at i (https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:9:121141)
+    at oO (https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:9:99104)
+    at https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:9:98971
+    at oF (https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:9:98978)
+    at oS (https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:9:94017)
+    at x (https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:33:1364)
+    at MessagePort.T (https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:33:1894)
+[    1070ms] Error: Minified React error #418; visit https://reactjs.org/docs/error-decoder.html?invariant=418 for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
+    at lh (https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:9:46418)
+    at i (https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:9:121141)
+    at oO (https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:9:99104)
+    at https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:9:98971
+    at oF (https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:9:98978)
+    at oS (https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:9:94017)
+    at x (https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:33:1364)
+    at MessagePort.T (https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:33:1894)
+[    1070ms] Error: Minified React error #423; visit https://reactjs.org/docs/error-decoder.html?invariant=423 for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
+    at i (https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:9:120810)
+    at oO (https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:9:99104)
+    at https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:9:98971
+    at oF (https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:9:98978)
+    at ox (https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:9:95730)
+    at oS (https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:9:94285)
+    at x (https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:33:1364)
+    at MessagePort.T (https://superhi.plus/_next/static/chunks/framework-fddfb078d7ba94bc.js:33:1894)
+[    2373ms] [ERROR] Failed to load resource: net::ERR_NAME_NOT_RESOLVED @ https://api.highway.tools/api/v1/plus/balls:0
+[    2373ms] [ERROR] o @ https://superhi.plus/_next/static/chunks/pages/index-cd76b1315d019e4f.js:0
+[    2373ms] [ERROR] Failed to load resource: net::ERR_NAME_NOT_RESOLVED @ https://api.highway.tools/api/v1/session:0
+[    2375ms] o
+[    2375ms] [ERROR] o @ https://superhi.plus/_next/static/chunks/pages/index-cd76b1315d019e4f.js:0
+[    2375ms] [ERROR] Failed to load resource: net::ERR_NAME_NOT_RESOLVED @ https://api.highway.tools/api/v1/session:0
+[    2375ms] [ERROR] Failed to load resource: net::ERR_NAME_NOT_RESOLVED @ https://api.highway.tools/api/v1/plus/balls:0
+[    2376ms] o

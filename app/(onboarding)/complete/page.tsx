@@ -1,7 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
 import { AnimatedContent } from '@/components/ui/animated-content';
 
@@ -9,13 +8,18 @@ export default function CompletePage() {
   const [completing, setCompleting] = useState(false);
   const [error, setError] = useState('');
   const router = useRouter();
-  const supabase = createClient();
 
   const handleComplete = async () => {
     setCompleting(true);
     setError('');
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) return;
+    let session = null;
+    try {
+      const { createClient } = await import('@/lib/supabase/client');
+      const supabase = createClient();
+      const res = await supabase.auth.getSession();
+      session = res.data.session;
+    } catch { /* Demo mode */ }
+    if (!session) { router.push('/activation'); return; }
     const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/onboarding-complete`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },

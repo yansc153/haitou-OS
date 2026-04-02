@@ -1,80 +1,115 @@
 'use client';
 
-import { createClient } from '@/lib/supabase/client';
+import { useState } from 'react';
 import { AnimatedContent } from '@/components/ui/animated-content';
 
 export default function LoginPage() {
-  const supabase = createClient();
+  const [loading, setLoading] = useState<string | null>(null);
+  const [error, setError] = useState('');
 
   const handleOAuth = async (provider: 'google' | 'github') => {
-    await supabase.auth.signInWithOAuth({
-      provider,
-      options: { redirectTo: `${window.location.origin}/auth/callback` },
-    });
+    setLoading(provider);
+    setError('');
+    try {
+      const { createClient } = await import('@/lib/supabase/client');
+      const supabase = createClient();
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider,
+        options: { redirectTo: `${window.location.origin}/auth/callback` },
+      });
+      if (error) throw error;
+    } catch {
+      setError('登录服务暂不可用，请稍后重试');
+      setLoading(null);
+    }
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background">
-      <AnimatedContent>
-        <div className="w-full max-w-md text-center">
-          {/* Logo area */}
-          <div className="mb-8">
-            <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-surface-low mb-4">
-              <span className="text-2xl">💼</span>
-            </div>
-            <h1 className="text-2xl font-display font-bold">拥有你的 AI 求职运营团队</h1>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Elevate your career trajectory with our<br />24/7 boutique AI agency.
+    <div className="min-h-screen bg-background flex flex-col">
+      {/* Top nav */}
+      <div className="px-10 py-6 flex items-center justify-between">
+        <span className="text-xl font-display font-extrabold">海投 OS</span>
+      </div>
+
+      {/* Centered login */}
+      <div className="flex-1 flex items-center justify-center px-6">
+        <AnimatedContent>
+          <div className="w-full max-w-lg text-center">
+            {/* Title — large, no icon */}
+            <h1 className="text-4xl lg:text-5xl font-display font-extrabold leading-tight mb-4">
+              拥有你的 AI 求职运营团队
+            </h1>
+            <p className="text-lg text-muted-foreground mb-12">
+              登录以组建你的专属 7 人运营团队
             </p>
-          </div>
 
-          {/* OAuth buttons */}
-          <div className="surface-card p-8 space-y-4">
-            <button
-              onClick={() => handleOAuth('google')}
-              className="flex w-full items-center justify-center gap-3 rounded-xl bg-surface-low px-4 py-3.5 text-sm font-medium hover:bg-border/30 transition-colors"
-            >
-              <GoogleIcon />
-              Continue with Google
-            </button>
+            {/* OAuth card */}
+            <div className="surface-card p-10 space-y-5 max-w-md mx-auto">
+              <button
+                onClick={() => handleOAuth('google')}
+                disabled={loading !== null}
+                className="flex w-full items-center justify-center gap-3 rounded-xl bg-surface-low px-5 py-4 text-base font-medium hover:bg-border/30 transition-colors disabled:opacity-50"
+              >
+                {loading === 'google' ? '跳转中...' : (
+                  <>
+                    <GoogleIcon />
+                    使用 Google 登录
+                  </>
+                )}
+              </button>
 
-            <button
-              onClick={() => handleOAuth('github')}
-              className="flex w-full items-center justify-center gap-3 rounded-xl bg-surface-low px-4 py-3.5 text-sm font-medium hover:bg-border/30 transition-colors"
-            >
-              <GithubIcon />
-              Continue with GitHub
-            </button>
+              <button
+                onClick={() => handleOAuth('github')}
+                disabled={loading !== null}
+                className="flex w-full items-center justify-center gap-3 rounded-xl bg-surface-low px-5 py-4 text-base font-medium hover:bg-border/30 transition-colors disabled:opacity-50"
+              >
+                {loading === 'github' ? '跳转中...' : (
+                  <>
+                    <GithubIcon />
+                    使用 GitHub 登录
+                  </>
+                )}
+              </button>
 
-            <div className="flex items-center gap-3 py-2">
-              <div className="h-px flex-1 bg-border/30" />
-              <span className="text-[10px] text-muted-foreground uppercase tracking-widest font-label">Secure Access</span>
-              <div className="h-px flex-1 bg-border/30" />
+              {error && <p className="text-base text-destructive">{error}</p>}
+
+              <div className="flex items-center gap-3 pt-4">
+                <div className="h-px flex-1 bg-border/30" />
+                <span className="text-[10px] text-muted-foreground uppercase tracking-[0.2em] font-label">安全登录</span>
+                <div className="h-px flex-1 bg-border/30" />
+              </div>
+
+              <p className="text-sm text-muted-foreground">
+                登录即表示同意
+                <a href="#" className="underline hover:text-foreground ml-1">服务条款</a>
+                {' '}和{' '}
+                <a href="#" className="underline hover:text-foreground">隐私政策</a>
+              </p>
             </div>
-
-            <p className="text-xs text-muted-foreground">
-              By signing in, you agree to our{' '}
-              <a href="#" className="underline hover:text-foreground">Terms of Service</a>
-              {' '}and{' '}
-              <a href="#" className="underline hover:text-foreground">Privacy Policy</a>.
-            </p>
           </div>
+        </AnimatedContent>
+      </div>
 
-          {/* Footer */}
-          <div className="mt-12 flex items-center justify-center gap-2 text-[10px] text-muted-foreground/50 uppercase tracking-widest font-label">
-            <div className="h-px w-6 bg-border/20" />
-            THE DIGITAL ATELIER | 2026
-            <div className="h-px w-6 bg-border/20" />
-          </div>
+      {/* Bottom status */}
+      <div className="px-10 py-6 flex items-center justify-between">
+        <div className="flex items-center gap-2 text-[10px] text-muted-foreground/40 uppercase tracking-[0.2em] font-label">
+          <div className="h-px w-8 bg-border/20" />
+          THE DIGITAL ATELIER | 2026
+          <div className="h-px w-8 bg-border/20" />
         </div>
-      </AnimatedContent>
+        <div className="flex items-center gap-2 text-[10px] text-muted-foreground/40 uppercase tracking-widest font-label">
+          <span>SYSTEM STATUS</span>
+          <div className="w-2 h-2 rounded-full bg-status-active" />
+          <span>全部在线</span>
+        </div>
+      </div>
     </div>
   );
 }
 
 function GoogleIcon() {
   return (
-    <svg className="h-4 w-4" viewBox="0 0 24 24">
+    <svg className="h-5 w-5" viewBox="0 0 24 24">
       <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4" />
       <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
       <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05" />
@@ -85,7 +120,7 @@ function GoogleIcon() {
 
 function GithubIcon() {
   return (
-    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
+    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor">
       <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
     </svg>
   );

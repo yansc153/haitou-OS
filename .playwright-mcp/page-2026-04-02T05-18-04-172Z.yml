@@ -1,0 +1,285 @@
+- generic [ref=e2]:
+  - navigation [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e5]: 海投 OS
+      - generic [ref=e6]:
+        - generic [ref=e7] [cursor=pointer]: EN / 中
+        - link "登录 Login" [ref=e8] [cursor=pointer]:
+          - /url: /login
+  - generic [ref=e9]:
+    - generic [ref=e10]:
+      - heading "A new way to get hired." [level=1] [ref=e11]:
+        - generic [ref=e12]:
+          - generic [ref=e13]: A
+          - generic [ref=e14]: new
+          - generic [ref=e15]: way
+          - generic [ref=e16]: to
+          - generic [ref=e17]: get
+          - generic [ref=e18]: hired.
+      - paragraph [ref=e22]: 7 位 AI 求职专员组成的专属运营团队。覆盖中英双区主流平台，自动投递、跟进、直到面试。
+      - generic [ref=e23]:
+        - link "开始组建团队 →" [ref=e24] [cursor=pointer]:
+          - /url: /login
+        - paragraph [ref=e25]: 免费开始 · 无需绑卡
+      - generic [ref=e26]:
+        - generic [ref=e27]:
+          - generic [ref=e28]: A
+          - generic [ref=e29]: B
+          - generic [ref=e30]: C
+          - generic [ref=e31]: D
+          - generic [ref=e32]: E
+          - generic [ref=e33]: F
+        - generic [ref=e34]: 200+ 团队已加入
+    - generic [ref=e35]:
+      - generic [ref=e36]:
+        - paragraph [ref=e37]: 海投助手是全新的 AI 求职运营模式。7 位 AI 专员覆盖中英双区主流招聘平台，从搜索、筛选、投递到跟进，全流程自动化。
+        - generic [ref=e38]:
+          - generic [ref=e39]:
+            - generic [ref=e40]: 7+
+            - generic [ref=e41]: Platforms
+          - generic [ref=e42]:
+            - generic [ref=e43]: "7"
+            - generic [ref=e44]: AI Agents
+          - generic [ref=e45]:
+            - generic [ref=e46]: 24/7
+            - generic [ref=e47]: Always-on
+      - generic [ref=e49]:
+        - heading "Your Operations Team" [level=2] [ref=e50]
+        - paragraph [ref=e51]: Seven specialized agents. Hover to inspect.
+        - generic [ref=e52]:
+          - generic [ref=e56]:
+            - img [ref=e57]
+            - generic [ref=e135]: 岗位研究员
+            - generic [ref=e136]: Scout
+            - generic [ref=e139]: 运行中
+          - generic [ref=e143]:
+            - img [ref=e144]
+            - generic [ref=e225]: 匹配审核员
+            - generic [ref=e226]: Reviewer
+            - generic [ref=e229]: 运行中
+          - generic [ref=e233]:
+            - img [ref=e234]
+            - generic [ref=e312]: 简历顾问
+            - generic [ref=e313]: Advisor
+            - generic [ref=e316]: 待命
+          - generic [ref=e320]:
+            - img [ref=e321]
+            - generic [ref=e425]: 调度官
+            - generic [ref=e426]: Commander
+            - generic [ref=e429]: 运行中
+          - generic [ref=e433]:
+            - img [ref=e434]
+            - generic [ref=e514]: 履历分析师
+            - generic [ref=e515]: Analyst
+            - generic [ref=e518]: 待命
+          - generic [ref=e522]:
+            - img [ref=e523]
+            - generic [ref=e595]: 投递专员
+            - generic [ref=e596]: Executor
+            - generic [ref=e599]: 运行中
+          - generic [ref=e603]:
+            - img [ref=e604]
+            - generic [ref=e698]: 招聘关系经理
+            - generic [ref=e699]: Liaison
+            - generic [ref=e702]: 待命
+  - generic [ref=e704]:
+    - generic [ref=e705]:
+      - paragraph [ref=e706]: Explore Haitou OS
+      - generic [ref=e708] [cursor=pointer]:
+        - generic [ref=e709]: →
+        - generic [ref=e710]: 智能投递
+      - generic [ref=e712] [cursor=pointer]:
+        - generic [ref=e713]: →
+        - generic [ref=e714]: 匹配筛选
+      - generic [ref=e716] [cursor=pointer]:
+        - generic [ref=e717]: →
+        - generic [ref=e718]: 自动跟进
+    - generic [ref=e719]:
+      - generic [ref=e721]:
+        - generic [ref=e722]: Smart Apply
+        - heading "你的投递 + 我们的自动化" [level=3] [ref=e723]
+        - paragraph [ref=e724]: 英文区：每个岗位获得量身定制的简历和求职信。中文区：原始简历直投，速度优先。投递专员自动完成 Greenhouse、Lever、LinkedIn、智联、拉勾的表单填写和提交。
+        - generic [ref=e725]:
+          - generic [ref=e726]:
+            - generic [ref=e727]: →
+            - generic [ref=e728]: 英文区简历逐岗定制
+          - generic [ref=e729]:
+            - generic [ref=e730]: →
+            - generic [ref=e731]: 中文区一键海投
+          - generic [ref=e732]:
+            - generic [ref=e733]: →
+            - generic [ref=e734]: 自动处理筛选题
+          - generic [ref=e735]:
+            - generic [ref=e736]: →
+            - generic [ref=e737]: 投递去重，避免重复
+        - generic [ref=e739] [cursor=pointer]:
+          - generic [ref=e741]: ▶
+          - generic [ref=e742]: Watch Demo
+      - generic [ref=e744]:
+        - generic [ref=e745]: Fit Screening
+        - heading "精准匹配，不浪费每一次投递" [level=3] [ref=e746]
+        - paragraph [ref=e747]: 匹配审核员评估每个岗位的技能匹配度、资历对齐、地点契合。只有「值得投」的机会才进入投递流程。
+        - generic [ref=e748]:
+          - generic [ref=e749]:
+            - generic [ref=e750]: →
+            - generic [ref=e751]: 五维匹配评估
+          - generic [ref=e752]:
+            - generic [ref=e753]: →
+            - generic [ref=e754]: 冲突检测（签证、地点、资历）
+          - generic [ref=e755]:
+            - generic [ref=e756]: →
+            - generic [ref=e757]: 策略模式可调：均衡/广撒网/精准
+          - generic [ref=e758]:
+            - generic [ref=e759]: →
+            - generic [ref=e760]: 人工不可及的覆盖速度
+        - generic [ref=e762] [cursor=pointer]:
+          - generic [ref=e764]: ▶
+          - generic [ref=e765]: Watch Demo
+      - generic [ref=e767]:
+        - generic [ref=e768]: Follow-up
+        - heading "投递不是终点，团队替你推进" [level=3] [ref=e769]
+        - paragraph [ref=e770]: 招聘关系经理自动读取雇主回复，判断意向，发送低风险跟进消息。你不需要每天刷收件箱。遇到薪资谈判、面试安排等关键节点，系统立即暂停，交给你决定。
+        - generic [ref=e771]:
+          - generic [ref=e772]:
+            - generic [ref=e773]: →
+            - generic [ref=e774]: 自动读取雇主回复
+          - generic [ref=e775]:
+            - generic [ref=e776]: →
+            - generic [ref=e777]: 低风险跟进消息自动发送
+          - generic [ref=e778]:
+            - generic [ref=e779]: →
+            - generic [ref=e780]: 薪资 / 面试安排自动暂停
+          - generic [ref=e781]:
+            - generic [ref=e782]: →
+            - generic [ref=e783]: 上下文摘要 + 建议回复，你来决定
+        - generic [ref=e785] [cursor=pointer]:
+          - generic [ref=e787]: ▶
+          - generic [ref=e788]: Watch Demo
+  - generic [ref=e790]:
+    - heading "把一个人的求职， 升级为整支团队的运作" [level=2] [ref=e792]:
+      - text: 把一个人的求职，
+      - text: 升级为整支团队的运作
+    - generic [ref=e794]:
+      - generic [ref=e795]:
+        - paragraph [ref=e796]: 中文平台
+        - generic [ref=e797]:
+          - generic [ref=e798]: Boss 直聘
+          - generic [ref=e799]: 智联招聘
+          - generic [ref=e800]: 拉勾
+          - generic [ref=e801]: 猎聘
+      - generic [ref=e802]:
+        - paragraph [ref=e803]: English Platforms
+        - generic [ref=e804]:
+          - generic [ref=e805]: LinkedIn
+          - generic [ref=e806]: Greenhouse
+          - generic [ref=e807]: Lever
+          - generic [ref=e808]: Indeed
+  - generic [ref=e810]:
+    - generic [ref=e811]:
+      - heading "团队能力与覆盖规模" [level=2] [ref=e812]
+      - paragraph [ref=e813]: 选择适合你的团队配置
+    - generic [ref=e814]:
+      - generic [ref=e816]:
+        - generic [ref=e817]: 个人体验版
+        - generic [ref=e818]: Free
+        - generic [ref=e819]: ¥0/月
+        - list [ref=e820]:
+          - listitem [ref=e821]:
+            - generic [ref=e822]: →
+            - text: 英文区 3 个平台
+          - listitem [ref=e823]:
+            - generic [ref=e824]: →
+            - text: 每月 2 小时运行
+          - listitem [ref=e825]:
+            - generic [ref=e826]: →
+            - text: 基础简历定制
+        - link "免费开始" [ref=e827] [cursor=pointer]:
+          - /url: /login
+      - generic [ref=e829]:
+        - generic [ref=e830]: Most Popular
+        - generic [ref=e831]: 全渠道职航版
+        - generic [ref=e832]: Pro
+        - generic [ref=e833]: ¥299/月
+        - list [ref=e834]:
+          - listitem [ref=e835]:
+            - generic [ref=e836]: →
+            - text: 开通 7 个主流平台
+          - listitem [ref=e837]:
+            - generic [ref=e838]: →
+            - text: 每月 8 小时运行
+          - listitem [ref=e839]:
+            - generic [ref=e840]: →
+            - text: AI 定制简历 + 求职信
+          - listitem [ref=e841]:
+            - generic [ref=e842]: →
+            - text: 全自动投递 + 跟进
+        - link "试用 Pro" [ref=e843] [cursor=pointer]:
+          - /url: /login
+      - generic [ref=e845]:
+        - generic [ref=e846]: 极速推进版
+        - generic [ref=e847]: Plus
+        - generic [ref=e848]: ¥899/月
+        - list [ref=e849]:
+          - listitem [ref=e850]:
+            - generic [ref=e851]: →
+            - text: 全平台覆盖
+          - listitem [ref=e852]:
+            - generic [ref=e853]: →
+            - text: 每月 24 小时运行
+          - listitem [ref=e854]:
+            - generic [ref=e855]: →
+            - text: 多重投递策略
+          - listitem [ref=e856]:
+            - generic [ref=e857]: →
+            - text: 优先客服
+        - link "升级 Plus" [ref=e858] [cursor=pointer]:
+          - /url: /login
+  - generic [ref=e859]:
+    - generic [ref=e861]:
+      - generic [ref=e862]:
+        - img [ref=e863]
+        - img [ref=e941]
+        - img [ref=e1022]
+        - img [ref=e1100]
+        - img [ref=e1204]
+        - img [ref=e1284]
+      - img [ref=e1357]
+      - paragraph [ref=e1451]: Your Team · 你的团队
+    - generic [ref=e1452]:
+      - heading "常见问题" [level=2] [ref=e1453]
+      - button "海投助手会自动投递简历吗？ +" [ref=e1455] [cursor=pointer]:
+        - generic [ref=e1456]: 海投助手会自动投递简历吗？
+        - generic [ref=e1457]: +
+      - button "AI 会不会代我发出不当消息？ +" [ref=e1459] [cursor=pointer]:
+        - generic [ref=e1460]: AI 会不会代我发出不当消息？
+        - generic [ref=e1461]: +
+      - button "支持哪些平台？ +" [ref=e1463] [cursor=pointer]:
+        - generic [ref=e1464]: 支持哪些平台？
+        - generic [ref=e1465]: +
+      - button "我的数据安全吗？ +" [ref=e1467] [cursor=pointer]:
+        - generic [ref=e1468]: 我的数据安全吗？
+        - generic [ref=e1469]: +
+      - button "免费版和付费版有什么区别？ +" [ref=e1471] [cursor=pointer]:
+        - generic [ref=e1472]: 免费版和付费版有什么区别？
+        - generic [ref=e1473]: +
+  - contentinfo [ref=e1474]:
+    - generic [ref=e1475]:
+      - generic [ref=e1476]:
+        - text: 海投 OS
+        - paragraph [ref=e1477]: The Digital Atelier · 专为精英求职者设计
+      - generic [ref=e1478]:
+        - generic [ref=e1479]:
+          - paragraph [ref=e1480]: Product
+          - link "Team Agents" [ref=e1481] [cursor=pointer]:
+            - /url: "#"
+          - link "Platforms" [ref=e1482] [cursor=pointer]:
+            - /url: "#"
+          - link "Pricing" [ref=e1483] [cursor=pointer]:
+            - /url: "#"
+        - generic [ref=e1484]:
+          - paragraph [ref=e1485]: Legal
+          - link "隐私政策" [ref=e1486] [cursor=pointer]:
+            - /url: "#"
+          - link "服务条款" [ref=e1487] [cursor=pointer]:
+            - /url: "#"
+    - generic [ref=e1488]: © 2026 Haitou OS. All rights reserved.

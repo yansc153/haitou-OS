@@ -72,19 +72,30 @@ export function AgentBadge({ agent, size = 'normal' }: { agent: AgentInfo; size?
     </div>
   );
 
+  const roleDescriptions: Record<string, { duty: string; scope: string[] }> = {
+    orchestrator: { duty: '团队调度与任务编排', scope: ['任务分配', '优先级管理', '团队协调'] },
+    profile_intelligence: { duty: '简历解析与背景分析', scope: ['简历提取', '技能识别', '方向推荐'] },
+    materials_advisor: { duty: '简历定制与求职信生成', scope: ['简历改写', '求职信', '翻译本地化'] },
+    opportunity_research: { duty: '岗位搜索与机会发现', scope: ['平台搜索', '岗位筛选', '去重处理'] },
+    matching_review: { duty: '匹配评估与推荐决策', scope: ['匹配打分', '冲突检测', '推荐判断'] },
+    application_executor: { duty: '表单填写与投递执行', scope: ['自动投递', '表单映射', '结果记录'] },
+    relationship_manager: { duty: '雇主沟通与跟进管理', scope: ['首次联系', '回复分析', '低风险跟进'] },
+  };
+  const desc = roleDescriptions[agent.role_code] || { duty: '专项运营', scope: ['待命中'] };
+
   const back = (
     <div className="surface-card h-full flex flex-col p-6 cursor-pointer">
-      <h4 className="text-sm font-semibold font-display mb-3">当前任务</h4>
-      <div className="text-xs text-muted-foreground mb-4">
-        {agent.current_task || '暂无进行中的任务'}
-      </div>
+      <h4 className="text-sm font-semibold font-display mb-2">职责范围</h4>
+      <p className="text-xs text-muted-foreground mb-4">{desc.duty}</p>
 
-      <h4 className="text-sm font-semibold font-display mb-2">工作统计</h4>
-      <div className="text-xs text-muted-foreground space-y-1">
-        <div>已完成 {agent.stats?.tasks_completed || 0} 个任务</div>
-        {agent.stats?.last_active && (
-          <div>最近活跃: {new Date(agent.stats.last_active).toLocaleString('zh-CN')}</div>
-        )}
+      <h4 className="text-sm font-semibold font-display mb-2">核心能力</h4>
+      <div className="text-xs text-muted-foreground space-y-1.5">
+        {desc.scope.map(s => (
+          <div key={s} className="flex items-center gap-2">
+            <span className="text-secondary">→</span>
+            <span>{s}</span>
+          </div>
+        ))}
       </div>
 
       <div className="mt-auto pt-4">

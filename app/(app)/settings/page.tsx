@@ -2,12 +2,28 @@
 
 import { useState } from 'react';
 
-const WORK_MODES = ['remote', 'onsite', 'hybrid', 'flexible'];
-const SCOPES = ['china', 'global_english', 'cross_market'];
-const STRATEGIES = ['balanced', 'broad', 'precise'];
+const WORK_MODES = [
+  { value: 'remote', label: '远程' },
+  { value: 'onsite', label: '现场' },
+  { value: 'hybrid', label: '混合' },
+  { value: 'flexible', label: '灵活' },
+];
+const SCOPES = [
+  { value: 'china', label: '中文区' },
+  { value: 'global_english', label: '英文区' },
+  { value: 'cross_market', label: '跨市场' },
+];
+const STRATEGIES = [
+  { value: 'balanced', label: '均衡' },
+  { value: 'broad', label: '广撒网' },
+  { value: 'precise', label: '精准' },
+];
 
 export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
+  const [workMode, setWorkMode] = useState('flexible');
+  const [scope, setScope] = useState('global_english');
+  const [strategy, setStrategy] = useState('balanced');
 
   return (
     <div className="max-w-2xl">
@@ -33,7 +49,7 @@ export default function SettingsPage() {
             <label className="text-sm font-semibold mb-2 block">工作模式</label>
             <div className="flex gap-2">
               {WORK_MODES.map(m => (
-                <button key={m} className="px-4 py-2 text-sm rounded-xl bg-surface-low hover:bg-border/40 transition-colors capitalize">{m}</button>
+                <button key={m.value} onClick={() => setWorkMode(m.value)} className={`px-4 py-2 text-sm rounded-xl transition-all ${workMode === m.value ? 'bg-foreground text-background font-semibold' : 'bg-surface-low hover:bg-border/40'}`}>{m.label}</button>
               ))}
             </div>
           </div>
@@ -41,7 +57,7 @@ export default function SettingsPage() {
             <label className="text-sm font-semibold mb-2 block">覆盖范围</label>
             <div className="flex gap-2">
               {SCOPES.map(s => (
-                <button key={s} className="px-4 py-2 text-sm rounded-xl bg-surface-low hover:bg-border/40 transition-colors">{s}</button>
+                <button key={s.value} onClick={() => setScope(s.value)} className={`px-4 py-2 text-sm rounded-xl transition-all ${scope === s.value ? 'bg-foreground text-background font-semibold' : 'bg-surface-low hover:bg-border/40'}`}>{s.label}</button>
               ))}
             </div>
           </div>
@@ -49,7 +65,7 @@ export default function SettingsPage() {
             <label className="text-sm font-semibold mb-2 block">策略模式</label>
             <div className="flex gap-2">
               {STRATEGIES.map(s => (
-                <button key={s} className="px-4 py-2 text-sm rounded-xl bg-surface-low hover:bg-border/40 transition-colors">{s}</button>
+                <button key={s.value} onClick={() => setStrategy(s.value)} className={`px-4 py-2 text-sm rounded-xl transition-all ${strategy === s.value ? 'bg-foreground text-background font-semibold' : 'bg-surface-low hover:bg-border/40'}`}>{s.label}</button>
               ))}
             </div>
           </div>

@@ -33,7 +33,33 @@ export default function ReadinessPage() {
     load();
   }, [supabase]);
 
-  if (!data) return <div className="text-muted-foreground">加载中...</div>;
+  if (!data) {
+    // Fallback: show skeleton/demo content when API unavailable
+    return (
+      <div className="max-w-2xl mx-auto">
+        <h1 className="text-4xl font-display font-extrabold tracking-tight mb-2">就绪检查</h1>
+        <p className="text-sm text-muted-foreground mb-8">确保所有条件满足后启动团队</p>
+        <div className="surface-card p-6 mb-8 ring-1 ring-status-warning/30">
+          <div className="flex items-center gap-3">
+            <div className="w-4 h-4 rounded-full bg-status-warning" />
+            <span className="text-lg font-display font-bold">请完成以下事项</span>
+          </div>
+        </div>
+        <div className="space-y-2 mb-6">
+          {['连接至少一个招聘平台', '补充投递资料（手机、邮箱）'].map((item, i) => (
+            <div key={i} className="surface-card p-4 flex items-center gap-3">
+              <span className="text-destructive text-sm">✗</span>
+              <span className="text-sm">{item}</span>
+            </div>
+          ))}
+        </div>
+        <button disabled className="w-full py-4 bg-foreground text-background rounded-2xl text-lg font-display font-bold opacity-30 cursor-not-allowed">
+          启动团队
+        </button>
+        <p className="text-xs text-muted-foreground mt-3 text-center">完成所有必须项后可启动</p>
+      </div>
+    );
+  }
 
   const isReady = data.blocking_items.length === 0;
 

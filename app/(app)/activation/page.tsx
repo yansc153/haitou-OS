@@ -68,20 +68,20 @@ export default function ActivationPage() {
 
   return (
     <div className="min-h-screen bg-foreground text-background flex flex-col items-center justify-center px-6 py-16">
-      {/* Header */}
+      {/* Header — 全中文 */}
       <div className="text-center mb-16">
-        <p className="text-xs text-white/30 uppercase tracking-[0.2em] font-label mb-4">
-          ACTIVATION SEQUENCE | 团队激活
+        <p className="text-xs text-background/30 uppercase tracking-[0.2em] font-label mb-4">
+          团队激活
         </p>
-        <h1 className="text-4xl lg:text-5xl font-display font-bold text-white leading-tight">
-          <BlurText text="Ready to Deploy." delay={100} />
+        <h1 className="text-5xl lg:text-6xl font-display font-extrabold leading-tight">
+          <BlurText text="团队已组建完毕，" delay={100} />
           <br />
-          <span className="text-white/70">
-            <BlurText text="Your Digital Atelier." delay={120} />
+          <span className="text-background/70">
+            <BlurText text="准备开始运营。" delay={120} />
           </span>
         </h1>
-        <p className="mt-4 text-sm text-white/40 max-w-md mx-auto">
-          Seven specialized AI agents have synchronized with your goals. Hover to inspect their operational core.
+        <p className="mt-5 text-base text-background/40 max-w-lg mx-auto">
+          7 位 AI 求职专员已与你的目标同步。悬停查看各专员的职责范围。
         </p>
       </div>
 
