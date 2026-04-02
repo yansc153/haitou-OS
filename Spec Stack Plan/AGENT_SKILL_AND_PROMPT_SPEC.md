@@ -40,6 +40,19 @@ This document defines:
 
 `what each role can actually do, how it should think, what it may output, and how it must fail safely`
 
+## Region Pipeline Strategy
+
+Skills are dispatched differently based on the opportunity's source platform region. This is the single most important dispatch rule for implementers:
+
+- **`full_tailored` (global_english platforms):** The full skill chain runs — resume tailoring, cover letter generation, localization, then submission. `简历顾问` is fully active.
+- **`passthrough` (china platforms):** Material generation skills are **skipped entirely**. The user's original resume is used directly. The pipeline is: discover → screen → submit. `简历顾问` is dormant after onboarding.
+
+Skills marked with ⚡ in their definitions have a `region_guard` that enforces this rule. The orchestrator must check `PlatformDefinition.pipeline_mode` before dispatching any material generation skill.
+
+See `DATA_MODEL_SPEC.md` → `PipelineMode` enum for the canonical definition.
+
+---
+
 ## Skill System Principles
 
 ### 1. Two-Layer Skill Architecture
@@ -1368,6 +1381,10 @@ type TruthfulRewriteOutput = {
 
 - attached whenever a tailored resume or supporting material is needed
 
+**region_guard**
+
+- ⚡ `full_tailored` only — this skill is skipped for `passthrough` pipeline opportunities (china platforms). The orchestrator must not dispatch `truthful-rewrite` for opportunities sourced from `china` region platforms.
+
 **detach_conditions**
 
 - detached when no content editing is requested or allowed
@@ -1455,6 +1472,10 @@ type SectionEditingOutput = {
 **attach_conditions**
 
 - attached when only part of the material should change
+
+**region_guard**
+
+- ⚡ `full_tailored` only — skipped for `passthrough` pipeline opportunities.
 
 **detach_conditions**
 
@@ -1556,6 +1577,10 @@ Adaptive behavior may include:
 
 - attached whenever a resume or formatted material is being regenerated or modified
 
+**region_guard**
+
+- ⚡ `full_tailored` only — skipped for `passthrough` pipeline opportunities.
+
 **detach_conditions**
 
 - may be skipped only for content-only internal summaries that are not user-facing resume artifacts
@@ -1645,6 +1670,10 @@ type MaterialLocalizationOutput = {
 
 - attached when JD, platform, or market requires different material language
 
+**region_guard**
+
+- ⚡ `full_tailored` only — skipped for `passthrough` pipeline opportunities.
+
 **detach_conditions**
 
 - detached when source language already matches target posture
@@ -1696,7 +1725,7 @@ Generate a truthful, opportunity-aligned cover letter or supporting narrative pa
 
 ```ts
 type CoverLetterGenerationOutput = {
-  target_language: "zh" | "en"
+  target_language: "zh" | "en" | "bilingual"
   subject_line?: string
   opening: string
   interest_statement: string
@@ -1735,6 +1764,10 @@ type CoverLetterGenerationOutput = {
 **attach_conditions**
 
 - attached when a platform, opportunity, or handoff package explicitly requires a cover letter
+
+**region_guard**
+
+- ⚡ `full_tailored` only — Chinese platform apply forms do not have cover letter fields. This skill is never dispatched for `passthrough` pipeline opportunities.
 
 **detach_conditions**
 
@@ -2608,6 +2641,7 @@ type SubmissionPlanningOutput = {
   required_fields: string[]
   expected_complexity: "low" | "medium" | "high"
   proceed_allowed: boolean
+  route_to_role?: "招聘关系经理"  // set when submission_mode = "conversation_entry"; orchestrator hands off to this role
   summary_text: string
 }
 ```
@@ -2629,6 +2663,10 @@ type SubmissionPlanningOutput = {
 - must not treat conversation-only actions as form submission
 - must remain compatible with platform rule constraints
 - must fail preflight if submission profile or platform readiness is insufficient
+
+**routing_rules**
+
+- when `submission_mode = "conversation_entry"`: the output must set `proceed_allowed = false` for `投递专员` self-execution. Instead, the output should include a `route_to_role: "招聘关系经理"` field signaling that the orchestrator must hand this opportunity to `招聘关系经理` for greeting-first execution (Boss直聘 model). `投递专员` must never assume a normal apply button exists on conversation-entry platforms.
 
 **observability_fields**
 
@@ -3427,11 +3465,25 @@ type HandoffPackageGenerationOutput = {
   suggested_next_action?: string
   suggested_reply_text?: string
   included_assets?: Array<{
-    asset_type: "resume" | "cover_letter" | "summary" | "reply_draft"
-    asset_ref?: string
+    asset_type: HandoffAssetType
+    asset_ref?: string  // FK → Material.id
   }>
   summary_text: string
 }
+
+// Maps to DATA_MODEL_SPEC MaterialType values that are valid in handoff context.
+// The orchestration layer links these to HandoffMaterial junction records.
+type HandoffAssetType =
+  | "light_edit_resume"
+  | "standard_tailored_resume"
+  | "deep_tailored_resume"
+  | "localized_resume"
+  | "cover_letter"
+  | "summary_card"
+  | "context_card"
+  | "reply_draft"
+  | "first_contact_draft"
+  | "follow_up_draft"
 ```
 
 **failure_modes**
@@ -3655,6 +3707,10 @@ type LanguageAdaptationOutput = {
 
 - attached whenever a role output must match platform, market, or UI language context
 
+**region_guard**
+
+- ⚡ `full_tailored` only for resume/material adaptation. For non-material contexts (e.g., adapting a first-contact message language), this skill may still be invoked regardless of pipeline mode.
+
 **detach_conditions**
 
 - skipped when source and target language already align
@@ -3840,7 +3896,8 @@ They should also imply a default composition order.
 
 Examples:
 
-- `简历顾问`: baseline inputs -> truthful rewrite -> section editing if needed -> visual fidelity preservation -> localization -> cover letter when required
+- `简历顾问` (full_tailored path / global_english): baseline inputs -> truthful rewrite -> section editing if needed -> visual fidelity preservation -> localization -> cover letter when required
+- `简历顾问` (passthrough path / china): **inactive for per-opportunity work** — only active during onboarding (resume parse + profile extraction). No tailoring, no cover letter, no localization.
 - `匹配审核员`: fit evaluation + conflict detection -> strategy-aware filtering -> recommendation generation
 - `投递专员`: submission planning -> field mapping -> package assembly -> screening question support if present -> execution result recording
 - `招聘关系经理`: first contact or reply reading -> low-risk follow-up if allowed -> conversation progression -> handoff package generation when boundary reached
@@ -3907,16 +3964,25 @@ Default dependency interpretation:
 
 **core_skills**
 
-- `truthful-rewrite`
-- `section-editing`
-- `visual-fidelity-preservation`
-- `material-localization`
-- `cover-letter-generation`
+- `truthful-rewrite` ⚡
+- `section-editing` ⚡
+- `visual-fidelity-preservation` ⚡
+- `material-localization` ⚡
+- `cover-letter-generation` ⚡
+
+All core skills are region-guarded (⚡ = `full_tailored` only). For `passthrough` pipeline opportunities (china platforms), `简历顾问` is not dispatched.
 
 **shared_supporting_skills**
 
 - `experience-normalization`
 - `language-baseline-detection`
+
+These shared skills run during onboarding for all users regardless of region.
+
+**region_activity_summary**
+
+- `full_tailored` (global_english): fully active — generates tailored resume, cover letter, localized materials per opportunity
+- `passthrough` (china): **dormant after onboarding** — only participates in initial resume parse and profile extraction. No per-opportunity material generation. The agent card on Team Home should display an appropriate status (e.g., "待命中 — 中文区投递使用原始简历" / "On standby — Chinese platforms use original resume").
 
 **future_attachable_skills**
 

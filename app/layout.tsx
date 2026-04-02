@@ -1,0 +1,19 @@
+import type { Metadata } from 'next';
+import './globals.css';
+
+export const metadata: Metadata = {
+  title: '海投助手 — Haitou OS',
+  description: 'AI-powered job search automation',
+};
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="zh">
+      <body className="min-h-screen antialiased">{children}</body>
+    </html>
+  );
+}

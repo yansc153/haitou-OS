@@ -1,0 +1,114 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Google Fonts: Manrope (headlines) + Plus Jakarta Sans (body) + Inter (labels) */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+
+@layer base {
+  :root {
+    /* The Digital Atelier — Warm neutral palette */
+    /* Surfaces */
+    --background: 40 33% 98%;        /* #FBF9F4 — base canvas */
+    --surface-low: 43 20% 95%;       /* #F5F4ED — primary content areas */
+    --surface-lowest: 0 0% 100%;     /* #FFFFFF — cards, interactive elements */
+    --foreground: 72 6% 18%;         /* #31332C — deep warm charcoal (never pure black) */
+
+    /* Semantic */
+    --card: 0 0% 100%;
+    --card-foreground: 72 6% 18%;
+    --primary: 0 2% 37%;             /* #5F5E5E — charcoal primary */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 115 10% 35%;        /* #526450 — sage green (action/growth) */
+    --secondary-foreground: 0 0% 100%;
+    --muted: 43 20% 95%;
+    --muted-foreground: 0 0% 45%;
+    --accent: 37 74% 28%;            /* #785A1A — warm gold (premium) */
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Borders — ghost borders only (15% opacity) */
+    --border: 40 12% 88%;            /* #E4E0D8 */
+    --input: 40 12% 90%;
+    --ring: 115 10% 35%;             /* sage for focus */
+
+    /* Radius — premium roundedness */
+    --radius: 0.75rem;
+    --radius-xl: 1.5rem;
+
+    /* Shadows — warm tinted, never pure black */
+    --shadow-ambient: 0px 12px 32px -4px rgba(49, 51, 44, 0.06);
+    --shadow-card: 0px 4px 16px -2px rgba(49, 51, 44, 0.04);
+    --shadow-lifted: 0px 16px 40px -8px rgba(49, 51, 44, 0.10);
+
+    /* Status colors */
+    --status-active: 142 71% 45%;
+    --status-warning: 38 92% 50%;
+    --status-error: 0 84% 60%;
+    --status-info: 221 83% 53%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Manrope', system-ui, sans-serif;
+    letter-spacing: -0.02em;
+  }
+}
+
+/* Utility classes for the Digital Atelier design system */
+@layer components {
+  .surface-low {
+    background-color: hsl(var(--surface-low));
+  }
+  .surface-card {
+    background-color: hsl(var(--surface-lowest));
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-card);
+  }
+  .surface-card-lifted {
+    background-color: hsl(var(--surface-lowest));
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-lifted);
+  }
+  .ghost-border {
+    border: 1px solid hsl(var(--border) / 0.15);
+  }
+  .text-sage {
+    color: hsl(var(--secondary));
+  }
+  .text-gold {
+    color: hsl(var(--accent));
+  }
+  .bg-sage {
+    background-color: hsl(var(--secondary));
+  }
+  .bg-gold {
+    background-color: hsl(var(--accent));
+  }
+}
+
+/* Badge drop-in animation for team activation */
+@keyframes dropIn {
+  0% { opacity: 0; transform: translateY(-80px) rotate(-2deg); }
+  60% { opacity: 1; transform: translateY(8px) rotate(1deg); }
+  80% { transform: translateY(-3px) rotate(-0.5deg); }
+  100% { opacity: 1; transform: translateY(0) rotate(0); }
+}
+
+@keyframes feedSlideIn {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-feed-in {
+  animation: feedSlideIn 0.3s ease-out both;
+}

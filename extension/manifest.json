@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Haitou OS — Cookie Export",
+  "version": "0.1.0",
+  "description": "Export platform session cookies to Haitou OS for automated job search.",
+  "permissions": [
+    "cookies",
+    "activeTab",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://www.linkedin.com/*",
+    "https://www.zhaopin.com/*",
+    "https://i.zhaopin.com/*",
+    "https://www.lagou.com/*",
+    "https://www.zhipin.com/*",
+    "https://www.liepin.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Haitou OS"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

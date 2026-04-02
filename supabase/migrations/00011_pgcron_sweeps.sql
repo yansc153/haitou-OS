@@ -1,0 +1,85 @@
+-- M3: pg_cron sweep definitions
+-- These are the SQL statements that pg_cron executes on schedule.
+-- In local dev, these run as manual calls. In production, register them via:
+--   SELECT cron.schedule('sweep_name', 'schedule', $$SQL$$);
+--
+-- Source: BACKEND_API_AND_ARCHITECTURE_SPEC.md § Scheduling Strategy
+
+-- NOTE: pg_cron must be enabled in the Supabase dashboard for production.
+-- These statements are provided as reference; actual cron registration
+-- happens via Supabase dashboard or migration after pg_cron is enabled.
+
+-- 1. Stale task sweep (every 5 minutes)
+-- Finds tasks stuck in 'running' for >5 min, requeues or fails them.
+-- SELECT cron.schedule(
+--   'sweep_stale_tasks',
+--   '*/5 * * * *',
+--   $$
+--     UPDATE agent_task
+--     SET status = CASE
+--       WHEN retry_count < max_retries THEN 'queued'::task_status
+--       ELSE 'failed'::task_status
+--     END,
+--     retry_count = CASE
+--       WHEN retry_count < max_retries THEN retry_count + 1
+--       ELSE retry_count
+--     END,
+--     last_retry_at = CASE
+--       WHEN retry_count < max_retries THEN now()
+--       ELSE last_retry_at
+--     END,
+--     failed_at = CASE
+--       WHEN retry_count >= max_retries THEN now()
+--       ELSE failed_at
+--     END,
+--     error_message = 'Stale task swept by pg_cron'
+--     WHERE status = 'running'
+--       AND started_at < now() - interval '5 minutes';
+--   $$
+-- );
+
+-- 2. Follow-up timing sweep (every 15 minutes)
+-- Identifies opportunities in followup_active with no recent conversation activity.
+-- SELECT cron.schedule(
+--   'sweep_followup_timing',
+--   '*/15 * * * *',
+--   $$
+--     INSERT INTO agent_task (team_id, agent_instance_id, task_type, task_loop, status, priority, related_entity_type, related_entity_id, trigger_source, idempotency_key)
+--     SELECT
+--       o.team_id,
+--       ai.id,
+--       'follow_up',
+--       'opportunity_progression',
+--       'queued',
+--       'medium',
+--       'opportunity',
+--       o.id,
+--       'timer',
+--       'followup_' || o.id || '_' || date_trunc('hour', now())::text
+--     FROM opportunity o
+--     JOIN team t ON t.id = o.team_id AND t.runtime_status = 'active'
+--     JOIN agent_instance ai ON ai.team_id = o.team_id AND ai.template_role_code = 'relationship_manager'
+--     LEFT JOIN conversation_thread ct ON ct.opportunity_id = o.id
+--     WHERE o.stage = 'followup_active'
+--       AND (ct.latest_message_at IS NULL OR ct.latest_message_at < now() - interval '3 days')
+--     ON CONFLICT (idempotency_key) DO NOTHING;
+--   $$
+-- );
+
+-- 3. Billing enforcement (every 1 minute) — handled by worker, not pg_cron
+-- The orchestration worker's BillingService.enforceBilling() runs every 60s.
+-- This is more accurate than pg_cron because it can compute effective balance
+-- in real-time rather than relying on a snapshot.
+
+-- 4. Platform health check (every 10 minutes) — handled by calling the Edge Function
+-- SELECT cron.schedule(
+--   'sweep_platform_health',
+--   '*/10 * * * *',
+--   $$
+--     SELECT net.http_post(
+--       url := current_setting('app.supabase_url') || '/functions/v1/platform-health-check',
+--       headers := jsonb_build_object('Authorization', 'Bearer ' || current_setting('app.service_role_key')),
+--       body := '{}'::jsonb
+--     );
+--   $$
+-- );
