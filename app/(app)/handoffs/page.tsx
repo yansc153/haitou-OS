@@ -3,192 +3,267 @@
 import { useState } from 'react';
 import { AnimatedContent } from '@/components/ui/animated-content';
 import { SpotlightCard } from '@/components/ui/spotlight-card';
+import { PIXEL_AVATARS } from '@/components/agents/pixel-avatars';
 
 type Handoff = {
   id: string; type: string; typeLabel: string; urgency: 'critical' | 'high' | 'medium';
-  title: string; company: string; reason: string; context: string;
-  suggestedAction: string; suggestedReply?: string; time: string;
+  title: string; person: string; personRole: string; company: string;
+  reason: string; context: string; quote?: string;
+  sentiment: { label: string; value: string; color: string };
+  risk: { label: string; color: string };
+  agentLogs: Array<{ time: string; event: string }>;
+  takeoverReason: string; takeoverDetails: string[];
+  suggestedActions: Array<{ icon: string; label: string; desc: string }>;
+  assignedAgent: string; assignedAgentRole: string;
+  time: string; refId: string;
 };
 
 const MOCK_HANDOFFS: Handoff[] = [
   {
     id: '1', type: 'private_contact', typeLabel: '私人联系方式', urgency: 'high',
-    title: 'Alexander Vance', company: 'Protocol Engines',
-    reason: 'HR 请求交换微信联系方式',
-    context: 'Scout 一直在与 Alexander 沟通「产品负责人」岗位。对话进展积极，Alexander 表达了对你背景中「用户增长」和「数据驱动」经验的强烈兴趣。最新一条消息中，Alexander 主动要求添加微信以便后续沟通。',
-    suggestedAction: '授权分享微信号',
-    suggestedReply: '感谢您的关注，我的微信是 xxxxxx，期待进一步沟通。',
-    time: '10 分钟前',
+    title: 'Private Contact Transfer', person: 'Alexander Vance', personRole: 'Principal Eng @ CloudScale', company: 'Protocol Engines',
+    reason: '候选人请求加密通道讨论薪资',
+    context: 'Scout 已经与 Alexander 沟通了 4 天。对话从技术栈对齐转移到「薪酬和隐私」话题。14:02 UTC，Alexander 拒绝通过平台聊天提供个人电话号码，引用了公司监控顾虑。',
+    quote: '"I\'d prefer to discuss the final offer details over Signal or a private call. The current channel feels too formal for these specifics."',
+    sentiment: { label: '情绪', value: '高兴趣 (92%)', color: 'bg-status-active/10 text-status-active' },
+    risk: { label: '流失风险', color: 'bg-status-warning/10 text-status-warning' },
+    agentLogs: [
+      { time: '14:02', event: '触发接管' },
+      { time: '13:58', event: '薪酬包已分享' },
+      { time: '13:45', event: '技术面试通过' },
+    ],
+    takeoverReason: '系统到达「隐私边界」协议。自动化系统禁止处理平台外联系信息，以维护安全合规。',
+    takeoverDetails: ['身份已验证', 'NDA 已签署'],
+    suggestedActions: [
+      { icon: '🔓', label: '授权访问', desc: '发送一次性安全链接' },
+      { icon: '✎', label: '手动处理', desc: '进入消息编辑模式' },
+      { icon: '↺', label: '交回团队', desc: '由 AI 专员继续跟进' },
+    ],
+    assignedAgent: 'opportunity_research', assignedAgentRole: '寻访官',
+    time: '2 分钟前', refId: 'HT-9921-X',
   },
   {
     id: '2', type: 'interview_time', typeLabel: '面试安排', urgency: 'critical',
-    title: 'Google Cloud 团队面试', company: 'Google',
-    reason: '需要确认面试时间',
-    context: '投递专员成功投递了 Google Cloud 的「高级产品经理」岗位。HR 回复确认进入面试环节，提出明天上午 10:00 (CST) 作为建议面试时间。',
-    suggestedAction: '确认面试时间',
-    time: '30 分钟前',
+    title: 'Interview Scheduling', person: 'Sarah Chen', personRole: 'HR Director @ Google', company: 'Google',
+    reason: '跨 3 个利益相关者日历检测到冲突',
+    context: 'Google Cloud 团队的 D 轮负责人面试需要协调 3 位面试官的时间。系统检测到时间冲突，需要人工确认最终时间。',
+    quote: '"We have a tight window next week. Can you confirm Tuesday 2pm PST works for all parties?"',
+    sentiment: { label: '情绪', value: '积极 (85%)', color: 'bg-status-active/10 text-status-active' },
+    risk: { label: '时效紧迫', color: 'bg-status-error/10 text-status-error' },
+    agentLogs: [
+      { time: '10:30', event: '面试邀请收到' },
+      { time: '10:32', event: '日历冲突检测' },
+      { time: '10:33', event: '触发接管' },
+    ],
+    takeoverReason: '面试时间确认需要你的个人日历可用性判断，自动化系统无法代替。',
+    takeoverDetails: ['面试类型：技术面', '时长：60 分钟'],
+    suggestedActions: [
+      { icon: '✓', label: '确认时间', desc: '接受建议的面试时间' },
+      { icon: '📅', label: '重新协调', desc: '提出替代时间' },
+      { icon: '↺', label: '交回团队', desc: '由排程官继续协调' },
+    ],
+    assignedAgent: 'orchestrator', assignedAgentRole: '排程官',
+    time: '14 分钟前', refId: 'HT-9918-B',
   },
   {
-    id: '3', type: 'salary_confirmation', typeLabel: '薪资确认', urgency: 'medium',
-    title: '薪资范围更新', company: 'Steward Inc.',
-    reason: '招聘方询问期望薪资',
-    context: '招聘关系经理在跟进 Steward 的「技术总监」岗位时，对方要求确认期望薪资范围。当前设定的范围可能偏低，建议根据市场行情调整。',
-    suggestedAction: '更新薪资范围',
-    time: '2 小时前',
-  },
-  {
-    id: '4', type: 'offer_decision', typeLabel: 'Offer 决策', urgency: 'critical',
-    title: '技术组合审计', company: 'Cortex AI',
-    reason: '收到技术面试邀请，需确认技术栈',
-    context: '收到 Cortex AI 的技术面试邀请。面试内容涵盖系统设计和分布式系统，需要确认你是否准备参加。',
-    suggestedAction: '确认参加',
-    time: '3 小时前',
+    id: '3', type: 'salary_confirmation', typeLabel: '背景核实', urgency: 'medium',
+    title: 'Technical Portfolio Audit', person: 'DevOps Team', personRole: 'Security Review', company: 'Cortex AI',
+    reason: '候选人 GitHub 仓库发现外部链接安全警告',
+    context: 'Cortex AI 的安全审查团队在审核你的 GitHub 作品集时，发现了一些外部依赖的安全警告。需要确认是否更新或说明。',
+    sentiment: { label: '情绪', value: '中性 (60%)', color: 'bg-status-info/10 text-status-info' },
+    risk: { label: '需关注', color: 'bg-status-warning/10 text-status-warning' },
+    agentLogs: [
+      { time: '09:15', event: '安全扫描完成' },
+      { time: '09:20', event: '3 个警告标记' },
+      { time: '09:22', event: '触发接管' },
+    ],
+    takeoverReason: '技术作品集涉及个人代码库，需要你亲自决定如何回应安全审查。',
+    takeoverDetails: ['警告数量：3', '严重级别：低'],
+    suggestedActions: [
+      { icon: '🔧', label: '更新依赖', desc: '修复安全警告后回复' },
+      { icon: '✎', label: '说明情况', desc: '解释已知风险' },
+      { icon: '↺', label: '交回团队', desc: '由审核官处理' },
+    ],
+    assignedAgent: 'matching_review', assignedAgentRole: '审核官',
+    time: '1 小时前', refId: 'HT-9915-C',
   },
 ];
 
 const URGENCY_STYLES = {
-  critical: { dot: 'bg-red-500', text: 'text-red-600' },
-  high: { dot: 'bg-status-warning', text: 'text-status-warning' },
-  medium: { dot: 'bg-status-info', text: 'text-status-info' },
+  critical: { dot: 'bg-red-500', label: '紧急' },
+  high: { dot: 'bg-status-warning', label: '重要' },
+  medium: { dot: 'bg-status-info', label: '待审' },
 };
 
 export default function HandoffsPage() {
-  const [selected, setSelected] = useState<Handoff | null>(MOCK_HANDOFFS[0]);
+  const [selected, setSelected] = useState<Handoff>(MOCK_HANDOFFS[0]);
   const [filter, setFilter] = useState('');
-
   const filtered = filter ? MOCK_HANDOFFS.filter(h => h.type === filter) : MOCK_HANDOFFS;
+
+  const AgentAvatar = PIXEL_AVATARS[selected.assignedAgent];
 
   return (
     <div>
       <div className="flex items-start justify-between mb-8">
         <div>
-          <h1 className="text-4xl font-display font-extrabold tracking-tight">交接中心</h1>
-          <p className="text-sm text-muted-foreground mt-1">需要你亲自决定的关键事项</p>
-        </div>
-        <div className="px-4 py-2 rounded-full bg-status-warning/10 text-status-warning text-sm font-bold">
-          {MOCK_HANDOFFS.length} 待处理
+          <h1 className="text-4xl font-display font-extrabold tracking-tight">等待交接</h1>
+          <p className="text-sm text-muted-foreground mt-1">需要人工介入的关键决策事项</p>
         </div>
       </div>
 
-      {/* Filters */}
-      <div className="flex gap-1 surface-card p-1 rounded-xl mb-6 w-fit">
-        {[
-          { value: '', label: '全部' },
-          { value: 'private_contact', label: '联系方式' },
-          { value: 'interview_time', label: '面试' },
-          { value: 'salary_confirmation', label: '薪资' },
-          { value: 'offer_decision', label: 'Offer' },
-        ].map(f => (
-          <button
-            key={f.value}
-            onClick={() => setFilter(f.value)}
-            className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${filter === f.value ? 'bg-foreground text-background' : 'text-muted-foreground hover:bg-surface-low'}`}
-          >
-            {f.label}
-          </button>
-        ))}
-      </div>
-
-      {/* List + Detail */}
-      <div className="grid lg:grid-cols-[1fr_480px] gap-6">
+      <div className="grid lg:grid-cols-[320px_1fr] gap-6">
         {/* Left: List */}
         <div className="space-y-3">
-          {filtered.map((h, i) => {
+          {filtered.map((h) => {
             const urg = URGENCY_STYLES[h.urgency];
             return (
-              <AnimatedContent key={h.id} delay={i * 0.04}>
-                <SpotlightCard
-                  className={`surface-card p-5 cursor-pointer hover:shadow-lifted transition-all duration-200 ${selected?.id === h.id ? 'ring-2 ring-foreground shadow-lifted -translate-y-0.5' : 'hover:-translate-y-0.5'}`}
+              <AnimatedContent key={h.id}>
+                <div
+                  className={`surface-card p-5 cursor-pointer transition-all duration-200 rounded-2xl ${
+                    selected.id === h.id ? 'ring-2 ring-foreground shadow-lifted -translate-y-0.5' : 'hover:shadow-card hover:-translate-y-0.5'
+                  }`}
                   onClick={() => setSelected(h)}
                 >
-                  <div className="flex items-start gap-4">
-                    <div className={`w-3 h-3 rounded-full mt-1.5 flex-shrink-0 ${urg.dot}`} />
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-surface-low font-bold uppercase">{h.typeLabel}</span>
-                      </div>
-                      <h3 className="text-sm font-bold">{h.title}</h3>
-                      <p className="text-xs text-muted-foreground mt-0.5">{h.company} · {h.reason}</p>
-                      <p className="text-[10px] text-muted-foreground/40 mt-2">{h.time}</p>
-                    </div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-[9px] px-2 py-0.5 rounded-full bg-surface-low font-bold uppercase tracking-wider">{urg.label}</span>
+                    <span className="text-xs text-muted-foreground">{h.time}</span>
                   </div>
-                </SpotlightCard>
+                  <h3 className="text-sm font-bold mb-0.5">{h.title}</h3>
+                  <p className="text-xs text-muted-foreground line-clamp-2">{h.reason}</p>
+                  <div className="flex items-center gap-2 mt-3">
+                    <div className="w-5 h-5 rounded-full bg-surface-low" />
+                    <span className="text-[10px] text-muted-foreground">Assigned to {h.assignedAgentRole}</span>
+                  </div>
+                </div>
               </AnimatedContent>
             );
           })}
         </div>
 
-        {/* Right: Detail */}
-        {selected && (
-          <div className="surface-card p-8 sticky top-20 h-fit rounded-2xl">
-            <div className="flex items-center gap-3 mb-6">
-              <span className="text-[10px] px-2.5 py-1 rounded-full bg-surface-low font-bold uppercase">{selected.typeLabel}</span>
-              <span className="text-xs text-muted-foreground">{selected.time}</span>
+        {/* Right: Full Detail — Stitch design */}
+        <div className="surface-card rounded-2xl overflow-hidden">
+          {/* Header */}
+          <div className="p-8 pb-6">
+            <div className="flex items-center justify-between mb-6">
+              <span className="px-3 py-1 rounded-full bg-status-warning/10 text-status-warning text-[10px] font-bold uppercase tracking-wider">
+                需人工干预
+              </span>
+              <span className="text-xs text-muted-foreground">Ref ID: {selected.refId}</span>
             </div>
 
-            <h2 className="text-2xl font-display font-extrabold mb-1">{selected.title}</h2>
-            <p className="text-base text-muted-foreground mb-8">{selected.company}</p>
-
-            <div className="space-y-6">
+            <h2 className="text-3xl lg:text-4xl font-display font-extrabold mb-3">{selected.title}</h2>
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-surface-low flex items-center justify-center text-lg">👤</div>
               <div>
-                <h3 className="text-xs font-label uppercase tracking-widest text-muted-foreground mb-2">上下文摘要</h3>
-                <p className="text-sm leading-relaxed">{selected.context}</p>
+                <p className="text-base font-semibold">{selected.person}</p>
+                <p className="text-sm text-muted-foreground">{selected.personRole}</p>
               </div>
-
-              <div>
-                <h3 className="text-xs font-label uppercase tracking-widest text-muted-foreground mb-2">接管原因</h3>
-                <p className="text-sm text-muted-foreground">{selected.reason}</p>
-              </div>
-
-              {selected.suggestedReply && (
-                <div>
-                  <h3 className="text-xs font-label uppercase tracking-widest text-muted-foreground mb-2">建议回复</h3>
-                  <div className="surface-low rounded-xl p-4 text-sm leading-relaxed">{selected.suggestedReply}</div>
-                </div>
-              )}
-
-              <div>
-                <h3 className="text-xs font-label uppercase tracking-widest text-muted-foreground mb-3">建议操作</h3>
-                <div className="grid grid-cols-3 gap-3">
-                  <button className="p-4 surface-card rounded-xl text-center hover:shadow-lifted hover:-translate-y-0.5 transition-all duration-200 group">
-                    <div className="w-10 h-10 rounded-xl bg-status-active/10 flex items-center justify-center mx-auto mb-2 group-hover:bg-status-active/20 transition-colors">
-                      <span className="text-status-active text-sm font-bold">✓</span>
-                    </div>
-                    <p className="text-xs font-bold">{selected.suggestedAction}</p>
-                  </button>
-                  <button className="p-4 surface-card rounded-xl text-center hover:shadow-lifted hover:-translate-y-0.5 transition-all duration-200 group">
-                    <div className="w-10 h-10 rounded-xl bg-status-warning/10 flex items-center justify-center mx-auto mb-2 group-hover:bg-status-warning/20 transition-colors">
-                      <span className="text-status-warning text-sm font-bold">✎</span>
-                    </div>
-                    <p className="text-xs font-bold">手动处理</p>
-                  </button>
-                  <button className="p-4 surface-card rounded-xl text-center hover:shadow-lifted hover:-translate-y-0.5 transition-all duration-200 group">
-                    <div className="w-10 h-10 rounded-xl bg-status-info/10 flex items-center justify-center mx-auto mb-2 group-hover:bg-status-info/20 transition-colors">
-                      <span className="text-status-info text-sm font-bold">↺</span>
-                    </div>
-                    <p className="text-xs font-bold">交回团队</p>
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex gap-3 mt-8">
-              <button className="flex-1 py-3.5 bg-foreground text-background rounded-xl text-sm font-bold hover:opacity-90 transition-opacity">
-                执行接管
-              </button>
-              <button
-                onClick={() => {
-                  const currentIdx = filtered.findIndex(h => h.id === selected.id);
-                  const next = filtered[(currentIdx + 1) % filtered.length];
-                  setSelected(next);
-                }}
-                className="px-6 py-3.5 rounded-xl text-sm font-medium bg-surface-low hover:bg-border/40 transition-colors"
-              >
-                下一个 →
-              </button>
             </div>
           </div>
-        )}
+
+          {/* Content grid: Context + Sidebar */}
+          <div className="px-8 pb-8">
+            <div className="grid lg:grid-cols-[1fr_260px] gap-6">
+              {/* Left: Context */}
+              <div className="space-y-6">
+                {/* Context Summary */}
+                <div className="surface-low rounded-2xl p-6">
+                  <h3 className="text-base font-bold mb-3 flex items-center gap-2">
+                    <span className="w-6 h-6 rounded bg-foreground/10 flex items-center justify-center text-xs">📋</span>
+                    背景摘要
+                  </h3>
+                  <p className="text-sm leading-relaxed text-muted-foreground">{selected.context}</p>
+
+                  {selected.quote && (
+                    <div className="mt-4 pl-4 border-l-2 border-border/40">
+                      <p className="text-sm italic text-muted-foreground/70 leading-relaxed">{selected.quote}</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Sentiment + Risk cards */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className={`rounded-2xl p-5 ${selected.sentiment.color}`}>
+                    <p className="text-[10px] font-label uppercase tracking-widest mb-1 opacity-60">{selected.sentiment.label}</p>
+                    <p className="text-lg font-display font-bold">{selected.sentiment.value}</p>
+                  </div>
+                  <div className={`rounded-2xl p-5 ${selected.risk.color}`}>
+                    <p className="text-[10px] font-label uppercase tracking-widest mb-1 opacity-60">风险</p>
+                    <p className="text-lg font-display font-bold">{selected.risk.label}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Right sidebar: Takeover Reason + Agent Logs */}
+              <div className="space-y-4">
+                {/* Takeover Reason */}
+                <div className="bg-foreground text-background rounded-2xl p-5">
+                  <h4 className="text-sm font-bold mb-3">接管原因</h4>
+                  <p className="text-xs text-background/70 leading-relaxed mb-4">{selected.takeoverReason}</p>
+                  <div className="space-y-2">
+                    {selected.takeoverDetails.map((d, i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <span className="w-4 h-4 rounded-full bg-status-active/20 flex items-center justify-center text-[8px] text-status-active">✓</span>
+                        <span className="text-xs text-background/80">{d}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Agent Logs */}
+                <div className="surface-low rounded-2xl p-5">
+                  <h4 className="text-sm font-bold mb-3">Agent 日志</h4>
+                  <div className="space-y-3">
+                    {selected.agentLogs.map((log, i) => (
+                      <div key={i} className="flex items-start gap-3">
+                        <span className="text-xs text-muted-foreground/50 w-10 flex-shrink-0 font-mono">{log.time}</span>
+                        <p className="text-xs text-muted-foreground">{log.event}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Suggested Actions */}
+            <div className="mt-8">
+              <h3 className="text-base font-bold mb-4">建议后续操作</h3>
+              <div className="grid grid-cols-3 gap-4">
+                {selected.suggestedActions.map((action, i) => (
+                  <SpotlightCard
+                    key={i}
+                    className="bg-white rounded-2xl p-5 cursor-pointer ghost-border hover:shadow-lifted hover:-translate-y-0.5 transition-all duration-200"
+                  >
+                    <div className="w-10 h-10 rounded-xl bg-surface-low flex items-center justify-center text-lg mb-3">
+                      {action.icon}
+                    </div>
+                    <h4 className="text-sm font-bold mb-1">{action.label}</h4>
+                    <p className="text-xs text-muted-foreground">{action.desc}</p>
+                  </SpotlightCard>
+                ))}
+              </div>
+            </div>
+
+            {/* Bottom actions */}
+            <div className="flex items-center justify-between mt-8 pt-6 border-t border-border/20">
+              <p className="text-xs text-muted-foreground">此操作涉及此接管项的所有后续流程</p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => {
+                    const idx = filtered.findIndex(h => h.id === selected.id);
+                    setSelected(filtered[(idx + 1) % filtered.length]);
+                  }}
+                  className="px-6 py-3 rounded-xl text-sm font-medium bg-surface-low hover:bg-border/40 transition-colors"
+                >
+                  跳过此项
+                </button>
+                <button className="px-8 py-3 bg-foreground text-background rounded-xl text-sm font-bold hover:opacity-90 transition-opacity">
+                  执行接管
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

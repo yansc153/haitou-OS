@@ -147,42 +147,110 @@ export default function OpportunitiesPage() {
         </div>
       </div>
 
-      {/* Side Panel */}
+      {/* Rich Detail Panel */}
       {selected && (
-        <div className="fixed inset-y-0 right-0 w-[480px] bg-background shadow-2xl z-50 overflow-y-auto border-l border-border/20">
+        <div className="fixed inset-y-0 right-0 w-[560px] bg-background shadow-2xl z-50 overflow-y-auto border-l border-border/20">
           <div className="p-8">
-            <button onClick={() => setSelected(null)} className="text-muted-foreground hover:text-foreground mb-6 text-sm">← 关闭</button>
-            <h2 className="text-2xl font-display font-extrabold mb-1">{selected.title}</h2>
-            <p className="text-base text-muted-foreground mb-2">{selected.company} · {selected.location}</p>
-            <span className={`inline-block px-3 py-1 rounded-full text-xs font-bold mb-8 ${STAGE_COLORS[selected.stage]}`}>
-              {STAGES.find(s => s.value === selected.stage)?.label}
-            </span>
+            {/* Header */}
+            <div className="flex items-center justify-between mb-6">
+              <button onClick={() => setSelected(null)} className="text-muted-foreground hover:text-foreground text-sm flex items-center gap-1">← 返回列表</button>
+              <span className={`px-3 py-1 rounded-full text-[10px] font-bold ${STAGE_COLORS[selected.stage]}`}>
+                {STAGES.find(s => s.value === selected.stage)?.label}
+              </span>
+            </div>
 
-            <div className="space-y-6">
+            <h2 className="text-3xl font-display font-extrabold mb-1">{selected.title}</h2>
+            <p className="text-lg text-muted-foreground mb-1">{selected.company}</p>
+            <p className="text-sm text-muted-foreground/60 mb-6">{selected.location}</p>
+
+            {/* Match + Agent badges */}
+            <div className="flex items-center gap-3 mb-8">
+              {selected.match && (
+                <span className="px-3 py-1.5 rounded-full bg-status-active/10 text-status-active text-sm font-bold">{selected.match} 匹配</span>
+              )}
+              <span className="px-3 py-1.5 rounded-full bg-surface-low text-sm">{selected.agent}</span>
+            </div>
+
+            {/* Tabs-like sections */}
+            <div className="space-y-8">
+              {/* Timeline */}
               <div>
-                <h3 className="text-sm font-bold mb-3">时间线</h3>
-                <div className="space-y-3">
+                <h3 className="text-base font-bold mb-4 flex items-center gap-2">
+                  <span className="w-6 h-6 rounded bg-foreground/10 flex items-center justify-center text-xs">📋</span>
+                  操作时间线
+                </h3>
+                <div className="surface-low rounded-2xl p-5 space-y-4">
                   {[
-                    { time: '今天 14:30', text: `${selected.agent} 发现了这个机会` },
-                    { time: '今天 14:32', text: '匹配审核员评估匹配度为「强匹配」' },
-                    { time: '今天 14:35', text: '简历顾问开始定制简历' },
+                    { time: '14:30', agent: '岗位研究员', event: '在 Greenhouse 发现此机会', status: 'done' },
+                    { time: '14:32', agent: '匹配审核员', event: '五维评估：强匹配（技能 95%，资历 90%，地点 100%）', status: 'done' },
+                    { time: '14:35', agent: '简历顾问', event: '开始为此岗位定制简历和求职信', status: 'done' },
+                    { time: '14:42', agent: '简历顾问', event: '简历定制完成，关键词：分布式系统、高可用架构', status: 'done' },
+                    { time: '14:45', agent: '投递专员', event: '通过 Greenhouse 表单提交投递', status: selected.stage === 'submitted' || selected.stage === 'contact_started' ? 'done' : 'pending' },
                   ].map((e, i) => (
-                    <div key={i} className="flex gap-3">
-                      <span className="text-xs text-muted-foreground/50 w-20 flex-shrink-0">{e.time}</span>
-                      <p className="text-sm text-muted-foreground">{e.text}</p>
+                    <div key={i} className="flex items-start gap-4">
+                      <div className="flex flex-col items-center">
+                        <div className={`w-3 h-3 rounded-full ${e.status === 'done' ? 'bg-status-active' : 'bg-muted-foreground/20'}`} />
+                        {i < 4 && <div className="w-px h-6 bg-border/30 mt-1" />}
+                      </div>
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <span className="text-xs font-mono text-muted-foreground/50">{e.time}</span>
+                          <span className="text-xs text-secondary font-semibold">{e.agent}</span>
+                        </div>
+                        <p className="text-sm text-muted-foreground">{e.event}</p>
+                      </div>
                     </div>
                   ))}
                 </div>
               </div>
+
+              {/* Generated Materials */}
               <div>
-                <h3 className="text-sm font-bold mb-3">生成材料</h3>
-                <div className="surface-card p-4 flex items-center gap-3">
-                  <span>📄</span>
-                  <div>
-                    <p className="text-sm font-semibold">定制简历 - {selected.company}</p>
-                    <p className="text-xs text-muted-foreground">已生成</p>
+                <h3 className="text-base font-bold mb-4 flex items-center gap-2">
+                  <span className="w-6 h-6 rounded bg-foreground/10 flex items-center justify-center text-xs">📄</span>
+                  生成材料
+                </h3>
+                <div className="space-y-3">
+                  <div className="surface-card p-4 rounded-xl flex items-center justify-between ghost-border">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-secondary/10 flex items-center justify-center text-sm">📝</div>
+                      <div>
+                        <p className="text-sm font-semibold">定制简历 — {selected.company}</p>
+                        <p className="text-xs text-muted-foreground">已优化关键词 · 英文版</p>
+                      </div>
+                    </div>
+                    <button className="text-xs text-secondary font-semibold hover:underline">预览</button>
+                  </div>
+                  <div className="surface-card p-4 rounded-xl flex items-center justify-between ghost-border">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-accent/10 flex items-center justify-center text-sm">✉️</div>
+                      <div>
+                        <p className="text-sm font-semibold">求职信 — {selected.company}</p>
+                        <p className="text-xs text-muted-foreground">已生成 · 300 词</p>
+                      </div>
+                    </div>
+                    <button className="text-xs text-secondary font-semibold hover:underline">预览</button>
                   </div>
                 </div>
+              </div>
+
+              {/* Submission Record */}
+              <div>
+                <h3 className="text-base font-bold mb-4 flex items-center gap-2">
+                  <span className="w-6 h-6 rounded bg-foreground/10 flex items-center justify-center text-xs">🚀</span>
+                  投递记录
+                </h3>
+                {(selected.stage === 'submitted' || selected.stage === 'contact_started') ? (
+                  <div className="surface-low rounded-2xl p-5">
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-sm font-semibold">Greenhouse 表单投递</span>
+                      <span className="px-2 py-0.5 rounded-full bg-status-active/10 text-status-active text-[10px] font-bold">成功</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">投递时间：今天 14:45 · 确认信号：页面显示 "Application received"</p>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground/50 p-4">尚未投递 — 当前阶段：{STAGES.find(s => s.value === selected.stage)?.label}</p>
+                )}
               </div>
             </div>
           </div>
