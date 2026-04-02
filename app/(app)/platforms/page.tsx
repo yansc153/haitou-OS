@@ -60,12 +60,12 @@ export default function PlatformsPage() {
       <div className="space-y-12">
           <PlatformGroup
             title="英文平台"
-            subtitle="full_tailored · 简历定制 + 求职信 + 自动投递"
+            subtitle="定制投递 · 每个岗位生成专属简历和求职信"
             platforms={groups.global_english}
           />
           <PlatformGroup
             title="中文平台"
-            subtitle="passthrough · 原始简历直投 · 速度优先"
+            subtitle="直投模式 · 原始简历快速覆盖，速度优先"
             platforms={groups.china}
           />
         </div>

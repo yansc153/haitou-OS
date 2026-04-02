@@ -30,8 +30,8 @@ export default function BillingPage() {
               <p className="text-xs text-muted-foreground mt-1">本月剩余 / 8h</p>
             </div>
           </div>
-          <div className="mt-6 h-2 bg-surface-low rounded-full overflow-hidden">
-            <div className="h-full bg-secondary rounded-full" style={{ width: '72%' }} />
+          <div className="mt-6 h-2.5 bg-border/30 rounded-full overflow-hidden">
+            <div className="h-full bg-foreground rounded-full" style={{ width: '72%' }} />
           </div>
           <p className="text-xs text-muted-foreground mt-2">下次刷新：2026-05-01</p>
         </SpotlightCard>

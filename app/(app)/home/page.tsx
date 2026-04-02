@@ -51,13 +51,19 @@ export default function TeamHomePage() {
         </div>
       </div>
 
-      {/* Agent Roster */}
-      <div className="flex items-start gap-6 overflow-x-auto pb-4 mb-8">
+      {/* Agent Roster — wrapped in container card */}
+      <div className="surface-card p-6 mb-8 rounded-2xl">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-display font-bold">团队阵容</h2>
+          <span className="text-xs text-muted-foreground/50">Hover to inspect</span>
+        </div>
+        <div className="flex items-start gap-6 overflow-x-auto pb-2">
         {agents.map((agent, i) => (
           <AnimatedContent key={agent.id} delay={i * 0.05}>
             <AgentBadge agent={agent} size="compact" />
           </AnimatedContent>
         ))}
+        </div>
       </div>
 
       {/* Main Grid: Feed + Sidebar */}

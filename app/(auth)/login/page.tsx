@@ -92,12 +92,12 @@ export default function LoginPage() {
 
       {/* Bottom status */}
       <div className="px-10 py-6 flex items-center justify-between">
-        <div className="flex items-center gap-2 text-[10px] text-muted-foreground/40 uppercase tracking-[0.2em] font-label">
-          <div className="h-px w-8 bg-border/20" />
+        <div className="flex items-center gap-2 text-[10px] text-muted-foreground/60 uppercase tracking-[0.2em] font-label">
+          <div className="h-px w-8 bg-border/40" />
           THE DIGITAL ATELIER | 2026
-          <div className="h-px w-8 bg-border/20" />
+          <div className="h-px w-8 bg-border/40" />
         </div>
-        <div className="flex items-center gap-2 text-[10px] text-muted-foreground/40 uppercase tracking-widest font-label">
+        <div className="flex items-center gap-2 text-[10px] text-muted-foreground/60 uppercase tracking-widest font-label">
           <span>SYSTEM STATUS</span>
           <div className="w-2 h-2 rounded-full bg-status-active" />
           <span>全部在线</span>

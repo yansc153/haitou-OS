@@ -98,7 +98,7 @@ export default function HandoffsPage() {
             return (
               <AnimatedContent key={h.id} delay={i * 0.04}>
                 <SpotlightCard
-                  className={`surface-card p-5 cursor-pointer hover:shadow-lifted transition-shadow ${selected?.id === h.id ? 'ring-2 ring-foreground/20' : ''}`}
+                  className={`surface-card p-5 cursor-pointer hover:shadow-lifted transition-all duration-200 ${selected?.id === h.id ? 'ring-2 ring-foreground shadow-lifted -translate-y-0.5' : 'hover:-translate-y-0.5'}`}
                   onClick={() => setSelected(h)}
                 >
                   <div className="flex items-start gap-4">
@@ -150,16 +150,22 @@ export default function HandoffsPage() {
               <div>
                 <h3 className="text-xs font-label uppercase tracking-widest text-muted-foreground mb-3">建议操作</h3>
                 <div className="grid grid-cols-3 gap-3">
-                  <button className="p-4 surface-card rounded-xl text-center hover:shadow-lifted transition-shadow">
-                    <div className="text-xl mb-2">🔓</div>
+                  <button className="p-4 surface-card rounded-xl text-center hover:shadow-lifted hover:-translate-y-0.5 transition-all duration-200 group">
+                    <div className="w-10 h-10 rounded-xl bg-status-active/10 flex items-center justify-center mx-auto mb-2 group-hover:bg-status-active/20 transition-colors">
+                      <span className="text-status-active text-sm font-bold">✓</span>
+                    </div>
                     <p className="text-xs font-bold">{selected.suggestedAction}</p>
                   </button>
-                  <button className="p-4 surface-card rounded-xl text-center hover:shadow-lifted transition-shadow">
-                    <div className="text-xl mb-2">✋</div>
+                  <button className="p-4 surface-card rounded-xl text-center hover:shadow-lifted hover:-translate-y-0.5 transition-all duration-200 group">
+                    <div className="w-10 h-10 rounded-xl bg-status-warning/10 flex items-center justify-center mx-auto mb-2 group-hover:bg-status-warning/20 transition-colors">
+                      <span className="text-status-warning text-sm font-bold">✎</span>
+                    </div>
                     <p className="text-xs font-bold">手动处理</p>
                   </button>
-                  <button className="p-4 surface-card rounded-xl text-center hover:shadow-lifted transition-shadow">
-                    <div className="text-xl mb-2">↩️</div>
+                  <button className="p-4 surface-card rounded-xl text-center hover:shadow-lifted hover:-translate-y-0.5 transition-all duration-200 group">
+                    <div className="w-10 h-10 rounded-xl bg-status-info/10 flex items-center justify-center mx-auto mb-2 group-hover:bg-status-info/20 transition-colors">
+                      <span className="text-status-info text-sm font-bold">↺</span>
+                    </div>
                     <p className="text-xs font-bold">交回团队</p>
                   </button>
                 </div>

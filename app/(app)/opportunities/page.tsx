@@ -86,14 +86,16 @@ export default function OpportunitiesPage() {
                   {items.map((opp, i) => (
                     <AnimatedContent key={opp.id} delay={i * 0.04}>
                       <SpotlightCard
-                        className="surface-card p-5 cursor-pointer hover:shadow-lifted transition-shadow"
+                        className="bg-white rounded-2xl p-5 cursor-pointer hover:shadow-lifted hover:-translate-y-0.5 transition-all duration-200 ghost-border"
                         onClick={() => setSelected(opp)}
                       >
+                        {/* Match color bar at top */}
+                        {opp.match && <div className="h-1 bg-status-active/30 rounded-full mb-3 w-2/3" />}
                         <h4 className="text-sm font-bold mb-1">{opp.title}</h4>
                         <p className="text-xs text-muted-foreground">{opp.company}</p>
-                        <p className="text-xs text-muted-foreground/60 mt-1">{opp.location}</p>
-                        <div className="flex items-center justify-between mt-3">
-                          <span className="text-[10px] text-muted-foreground/50">{opp.agent}</span>
+                        <p className="text-xs text-muted-foreground/50 mt-0.5">{opp.location}</p>
+                        <div className="flex items-center justify-between mt-3 pt-3 border-t border-border/10">
+                          <span className="text-[10px] text-secondary font-semibold">{opp.agent}</span>
                           {opp.match && (
                             <span className="px-2 py-0.5 rounded-full bg-status-active/10 text-status-active text-[9px] font-bold">
                               {opp.match}
