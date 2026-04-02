@@ -222,7 +222,8 @@ function applyTheme(mode: ThemeMode) {
 }
 
 /**
- * Floating theme switcher — 6 dots in a vertical pill
+ * Theme Switcher — slide-out drawer from right edge
+ * Small floating trigger dot on every page → slides out a panel with 6 modes + audio toggle
  */
 export function ThemeSwitcher() {
   const { mode, setMode } = useTheme();
@@ -230,7 +231,7 @@ export function ThemeSwitcher() {
   const [muted, setMuted] = useState(false);
 
   const handleMute = async () => {
-    const { setAudioEnabled, isAudioEnabled, playAmbientForMode } = await import('@/lib/ambient-audio');
+    const { setAudioEnabled, playAmbientForMode } = await import('@/lib/ambient-audio');
     const newState = !muted;
     setMuted(newState);
     setAudioEnabled(!newState);
@@ -239,7 +240,6 @@ export function ThemeSwitcher() {
 
   const handleSetMode = async (m: ThemeMode) => {
     setMode(m);
-    setOpen(false);
     if (!muted) {
       const { playAmbientForMode } = await import('@/lib/ambient-audio');
       playAmbientForMode(m);
@@ -247,53 +247,120 @@ export function ThemeSwitcher() {
   };
 
   return (
-    <div className="fixed left-5 top-1/2 -translate-y-1/2 z-[100] flex flex-col items-center gap-3">
-      {/* Main toggle */}
+    <>
+      {/* Trigger dot — bottom-right corner, always visible on all pages */}
       <button
-        onClick={() => setOpen(!open)}
-        className="w-9 h-9 rounded-full flex items-center justify-center transition-all duration-300 hover:scale-110 shadow-lg"
+        onClick={() => setOpen(true)}
+        className="fixed bottom-6 right-6 z-[200] w-10 h-10 rounded-full flex items-center justify-center transition-all duration-300 hover:scale-110 shadow-lg"
         style={{ background: THEMES[mode].dotColor }}
-        title={`当前主题: ${THEMES[mode].label}`}
+        title={`主题: ${THEMES[mode].label} — 点击切换`}
       >
         <div className="w-3 h-3 rounded-full bg-white/50" />
       </button>
 
-      {/* Expanded dots */}
+      {/* Backdrop */}
       {open && (
-        <div className="flex flex-col gap-2.5 p-2.5 rounded-2xl backdrop-blur-xl shadow-xl border border-white/10"
-          style={{ background: 'rgba(128,128,128,0.15)' }}
-        >
-          {MODES.map((m) => (
-            <button
-              key={m}
-              onClick={() => handleSetMode(m)}
-              className={`group relative w-8 h-8 rounded-full flex items-center justify-center transition-all duration-200 hover:scale-125 ${
-                mode === m ? 'ring-2 ring-white/60 scale-110' : ''
-              }`}
-              style={{ background: THEMES[m].dotColor }}
-              title={THEMES[m].label}
-            >
-              {mode === m && <div className="w-2.5 h-2.5 rounded-full bg-white" />}
-              <span className="absolute left-11 px-2.5 py-1 rounded-lg text-[10px] font-bold whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg"
-                style={{ background: THEMES[m].dotColor, color: '#fff' }}
-              >
-                {THEMES[m].label}
-              </span>
-            </button>
-          ))}
-
-          {/* Mute toggle */}
-          <button
-            onClick={handleMute}
-            className={`w-8 h-8 rounded-full flex items-center justify-center border transition-all duration-200 hover:scale-110 text-xs ${
-              muted ? 'border-white/10 opacity-40' : 'border-white/20'
-            }`}
-            title={muted ? '开启声音' : '静音'}
-          >
-            {muted ? '🔇' : '♫'}
-          </button>
-        </div>
+        <div
+          className="fixed inset-0 z-[300] bg-black/20 backdrop-blur-sm transition-opacity"
+          onClick={() => setOpen(false)}
+        />
       )}
-    </div>
+
+      {/* Slide-out drawer */}
+      <div
+        className={`fixed top-0 right-0 h-full w-[320px] z-[400] transition-transform duration-300 ease-out ${
+          open ? 'translate-x-0' : 'translate-x-full'
+        }`}
+        style={{ background: 'hsl(var(--background))' }}
+      >
+        <div className="h-full flex flex-col p-8 overflow-y-auto border-l" style={{ borderColor: 'hsl(var(--border))' }}>
+          {/* Header */}
+          <div className="flex items-center justify-between mb-8">
+            <div>
+              <h2 className="text-lg font-display font-bold" style={{ color: 'hsl(var(--foreground))' }}>主题模式</h2>
+              <p className="text-sm mt-0.5" style={{ color: 'hsl(var(--muted-foreground))' }}>选择界面风格和环境音效</p>
+            </div>
+            <button
+              onClick={() => setOpen(false)}
+              className="w-8 h-8 rounded-full flex items-center justify-center hover:opacity-70 transition-opacity text-sm"
+              style={{ background: 'hsl(var(--muted))', color: 'hsl(var(--foreground))' }}
+            >
+              ✕
+            </button>
+          </div>
+
+          {/* Mode cards */}
+          <div className="space-y-3 flex-1">
+            {MODES.map((m) => {
+              const theme = THEMES[m];
+              const isActive = mode === m;
+              return (
+                <button
+                  key={m}
+                  onClick={() => handleSetMode(m)}
+                  className={`w-full flex items-center gap-4 p-4 rounded-2xl text-left transition-all duration-200 ${
+                    isActive ? 'shadow-lg scale-[1.02]' : 'hover:scale-[1.01]'
+                  }`}
+                  style={{
+                    background: isActive ? theme.dotColor : 'hsl(var(--muted))',
+                    color: isActive ? '#fff' : 'hsl(var(--foreground))',
+                  }}
+                >
+                  {/* Dot */}
+                  <div
+                    className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0"
+                    style={{ background: isActive ? 'rgba(255,255,255,0.25)' : theme.dotColor }}
+                  >
+                    {isActive && <div className="w-3 h-3 rounded-full bg-white" />}
+                  </div>
+
+                  {/* Label */}
+                  <div>
+                    <div className="text-sm font-bold">{theme.label}</div>
+                    <div className="text-xs opacity-70">
+                      {m === 'night' && '深色 · 虫鸣'}
+                      {m === 'moonlight' && '深蓝 · 静夜'}
+                      {m === 'day' && '暖白 · 静音'}
+                      {m === 'sunny' && '明亮 · 自然'}
+                      {m === 'rainy' && '灰蓝 · 雨声'}
+                      {m === 'snowy' && '冷蓝 · 风雪'}
+                    </div>
+                  </div>
+
+                  {/* Active indicator */}
+                  {isActive && (
+                    <div className="ml-auto text-xs font-bold bg-white/20 px-2 py-0.5 rounded-full">
+                      当前
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Audio control */}
+          <div className="mt-6 pt-6" style={{ borderTop: '1px solid hsl(var(--border))' }}>
+            <button
+              onClick={handleMute}
+              className="w-full flex items-center justify-between p-4 rounded-2xl transition-all"
+              style={{ background: 'hsl(var(--muted))' }}
+            >
+              <div className="flex items-center gap-3">
+                <span className="text-lg">{muted ? '🔇' : '🔊'}</span>
+                <div className="text-left">
+                  <div className="text-sm font-bold" style={{ color: 'hsl(var(--foreground))' }}>环境音效</div>
+                  <div className="text-xs" style={{ color: 'hsl(var(--muted-foreground))' }}>
+                    {muted ? '已静音' : '已开启 — 切换主题自动播放'}
+                  </div>
+                </div>
+              </div>
+              <div className={`w-10 h-6 rounded-full flex items-center px-0.5 transition-colors ${muted ? 'bg-gray-300' : 'bg-green-500'}`}>
+                <div className={`w-5 h-5 rounded-full bg-white shadow transition-transform ${muted ? '' : 'translate-x-4'}`} />
+              </div>
+            </button>
+          </div>
+        </div>
+      </div>
+    </>
   );
 }
