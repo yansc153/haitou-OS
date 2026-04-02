@@ -2,6 +2,21 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Theme transition — smooth 400ms color interpolation on all CSS custom properties */
+html {
+  transition:
+    --background 400ms ease,
+    --foreground 400ms ease,
+    --surface-low 400ms ease,
+    --surface-lowest 400ms ease,
+    --card 400ms ease,
+    --primary 400ms ease,
+    --secondary 400ms ease,
+    --muted 400ms ease,
+    --border 400ms ease,
+    --accent 400ms ease;
+}
+
 /* Google Fonts: Manrope (headlines) + Plus Jakarta Sans (body) + Inter (labels) */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
 

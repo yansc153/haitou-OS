@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import { ThemeWrapper } from './theme-wrapper';
 
 export const metadata: Metadata = {
   title: '海投助手 — Haitou OS',
@@ -13,7 +14,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="zh">
-      <body className="min-h-screen antialiased">{children}</body>
+      <body className="min-h-screen antialiased">
+        <ThemeWrapper>{children}</ThemeWrapper>
+      </body>
     </html>
   );
 }
