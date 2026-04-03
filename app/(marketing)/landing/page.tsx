@@ -147,7 +147,7 @@ export default function LandingPage() {
                     <div className="mt-3 text-base font-bold">{agent.title_zh}</div>
                     <div className="text-xs text-background/40 font-label mt-1">{agent.persona_name}</div>
                     <div className="mt-3 flex items-center gap-1.5">
-                      <div className={`w-2 h-2 rounded-full ${agent.status === 'working' ? 'bg-green-400 animate-pulse' : 'bg-background/25'}`} />
+                      <div className={`w-2 h-2 rounded-full ${agent.status === 'working' ? 'bg-status-active animate-pulse' : 'bg-background/25'}`} />
                       <span className="text-[11px] text-background/35">{agent.status === 'working' ? '运行中' : '待命'}</span>
                     </div>
                   </div>

@@ -15,10 +15,10 @@ const STAGES = [
 
 const STAGE_COLORS: Record<string, string> = {
   discovered: 'bg-muted-foreground/20 text-muted-foreground',
-  screened: 'bg-blue-100 text-blue-700',
+  screened: 'bg-status-info/15 text-status-info',
   prioritized: 'bg-amber-100 text-amber-700',
   submitted: 'bg-secondary/20 text-secondary',
-  contact_started: 'bg-violet-100 text-violet-700',
+  contact_started: 'bg-accent/15 text-accent',
 };
 
 type Opp = { id: string; title: string; company: string; location: string; stage: string; agent: string; match?: string };

@@ -11,7 +11,7 @@ const STATUS_STYLES: Record<string, { bg: string; text: string; label: string }>
   available_unconnected: { bg: 'bg-muted-foreground/10', text: 'text-muted-foreground', label: '未连接' },
   pending_login: { bg: 'bg-status-info/10', text: 'text-status-info', label: '连接中' },
   session_expired: { bg: 'bg-status-warning/10', text: 'text-status-warning', label: '已过期' },
-  plan_locked: { bg: 'bg-violet-100', text: 'text-violet-700', label: '需升级' },
+  plan_locked: { bg: 'bg-accent/15', text: 'text-accent', label: '需升级' },
 };
 
 type PlatformEntry = {
@@ -104,7 +104,7 @@ function PlatformGroup({ title, subtitle, platforms }: { title: string; subtitle
                       <span key={cap} className={`px-2 py-0.5 rounded text-[10px] ${
                         st === 'healthy' ? 'bg-status-active/10 text-status-active' :
                         st === 'degraded' ? 'bg-status-warning/10 text-status-warning' :
-                        st === 'blocked' ? 'bg-red-100 text-red-600' :
+                        st === 'blocked' ? 'bg-status-error/15 text-status-error' :
                         'bg-muted-foreground/10 text-muted-foreground/50'
                       }`}>
                         {cap}
@@ -162,7 +162,7 @@ function PlatformGroup({ title, subtitle, platforms }: { title: string; subtitle
                     </button>
                   )}
                   {p.connection_status === 'plan_locked' && (
-                    <Link href="/billing" className="px-4 py-1.5 bg-violet-100 text-violet-700 rounded-lg text-xs font-bold hover:opacity-90">
+                    <Link href="/billing" className="px-4 py-1.5 bg-accent/15 text-accent rounded-lg text-xs font-bold hover:opacity-90">
                       升级解锁
                     </Link>
                   )}

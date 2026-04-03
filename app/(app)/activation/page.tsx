@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
 import { AgentBadge, AgentBadgeDropIn, type AgentInfo } from '@/components/agents/agent-badge';
@@ -21,7 +21,7 @@ export default function ActivationPage() {
   const [confirming, setConfirming] = useState(false);
   const [serverAgents, setServerAgents] = useState<AgentInfo[]>([]);
   const router = useRouter();
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
 
   useEffect(() => {
     async function load() {

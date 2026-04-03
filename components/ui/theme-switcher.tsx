@@ -31,7 +31,7 @@ const THEMES: Record<ThemeMode, {
       '--secondary': '200 12% 45%',
       '--secondary-foreground': '30 5% 85%',
       '--muted': '20 3% 14%',
-      '--muted-foreground': '20 4% 42%',
+      '--muted-foreground': '20 5% 56%',
       '--accent': '37 40% 38%',
       '--accent-foreground': '30 5% 85%',
       '--border': '20 4% 16%',
@@ -58,7 +58,7 @@ const THEMES: Record<ThemeMode, {
       '--secondary': '210 18% 42%',
       '--secondary-foreground': '215 10% 82%',
       '--muted': '220 8% 17%',
-      '--muted-foreground': '215 8% 40%',
+      '--muted-foreground': '215 10% 55%',
       '--accent': '210 20% 48%',
       '--accent-foreground': '215 10% 82%',
       '--border': '220 8% 20%',
@@ -139,7 +139,7 @@ const THEMES: Record<ThemeMode, {
       '--secondary': '210 12% 55%',
       '--secondary-foreground': '210 5% 88%',
       '--muted': '210 6% 35%',
-      '--muted-foreground': '210 6% 52%',
+      '--muted-foreground': '210 8% 68%',
       '--accent': '210 12% 58%',
       '--accent-foreground': '210 5% 88%',
       '--border': '210 6% 38%',
@@ -166,7 +166,7 @@ const THEMES: Record<ThemeMode, {
       '--secondary': '215 20% 35%',
       '--secondary-foreground': '0 0% 100%',
       '--muted': '215 15% 84%',
-      '--muted-foreground': '215 10% 45%',
+      '--muted-foreground': '215 15% 35%',
       '--accent': '215 25% 30%',
       '--accent-foreground': '215 25% 90%',
       '--border': '215 15% 78%',
@@ -354,7 +354,7 @@ export function ThemeSwitcher() {
                   </div>
                 </div>
               </div>
-              <div className={`w-10 h-6 rounded-full flex items-center px-0.5 transition-colors ${muted ? 'bg-gray-300' : 'bg-green-500'}`}>
+              <div className={`w-10 h-6 rounded-full flex items-center px-0.5 transition-colors ${muted ? 'bg-muted-foreground/30' : 'bg-status-active'}`}>
                 <div className={`w-5 h-5 rounded-full bg-white shadow transition-transform ${muted ? '' : 'translate-x-4'}`} />
               </div>
             </button>

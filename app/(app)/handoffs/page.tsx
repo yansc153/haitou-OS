@@ -90,7 +90,7 @@ const MOCK_HANDOFFS: Handoff[] = [
 ];
 
 const URGENCY_STYLES = {
-  critical: { dot: 'bg-red-500', label: '紧急' },
+  critical: { dot: 'bg-status-error', label: '紧急' },
   high: { dot: 'bg-status-warning', label: '重要' },
   medium: { dot: 'bg-status-info', label: '待审' },
 };
