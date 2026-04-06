@@ -91,6 +91,22 @@ export async function discoverLinkedInJobs(params: {
       }
     }
 
+    // Load JD text for top results (click into detail view)
+    for (const job of jobs.slice(0, 5)) {
+      try {
+        await page.goto(job.job_description_url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+        await randomDelay(DELAY.page[0], DELAY.page[1]);
+
+        if (await isAuthWall(page)) {
+          console.warn('[linkedin] Auth wall on job detail, stopping JD fetch');
+          break;
+        }
+
+        const jd = await page.locator('.jobs-description__content, .jobs-box__html-content, .jobs-description-content__text').first().textContent();
+        job.job_description_text = jd?.trim() || '';
+      } catch { /* skip detail */ }
+    }
+
     return jobs;
 
   } catch (err) {

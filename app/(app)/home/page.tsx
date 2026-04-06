@@ -71,6 +71,9 @@ const EVENT_TYPE_ZH: Record<string, string> = {
   handoff_created: '交接创建',
   handoff_takeover: '交接处理',
   budget_exhausted: '预算用尽',
+  boss_greeting_sent: '打招呼成功',
+  boss_greeting_failed: '打招呼失败',
+  system_heartbeat: '系统心跳',
 };
 
 function eventTypeLabel(eventType: string): string {
@@ -207,7 +210,7 @@ export default function TeamHomePage() {
         <div>
           <div className="flex items-center justify-between mb-5">
             <h2 className="text-xl font-display font-bold">实时动态</h2>
-            <Link href="/review" className="text-xs text-muted-foreground hover:text-foreground transition-colors font-label uppercase tracking-wider">
+            <Link href="/opportunities" className="text-xs text-muted-foreground hover:text-foreground transition-colors font-label uppercase tracking-wider">
               查看全部日志 →
             </Link>
           </div>

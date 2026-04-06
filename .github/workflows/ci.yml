@@ -22,6 +22,9 @@ jobs:
       - name: TypeScript check
         run: npx tsc --noEmit
 
+      - name: Unit tests
+        run: npx vitest run tests/pipeline-logic.test.ts tests/budget.test.ts tests/state-machines.test.ts tests/pipeline-routing.test.ts tests/executor-contracts.test.ts --reporter=verbose
+
       - name: Build
         run: npm run build
         env:

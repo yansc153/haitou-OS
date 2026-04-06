@@ -147,7 +147,7 @@ export class HandoffDetectionService {
     await this.db.from('timeline_event').insert({
       team_id: params.teamId,
       event_type: 'handoff_created',
-      summary_text: `Handoff needed: ${params.reason}`,
+      summary_text: `需要接管: ${params.reason}`,
       actor_type: 'agent',
       actor_id: params.sourceAgentId,
       related_entity_type: 'handoff',

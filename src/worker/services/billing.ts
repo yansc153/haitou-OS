@@ -71,7 +71,7 @@ export class BillingService {
       runtime_delta_seconds: -durationSeconds,
       balance_after_seconds: newBalance,
       trigger_source: pauseOrigin === 'user' ? 'user' : 'system',
-      reason: pauseOrigin === 'system_entitlement' ? 'Runtime balance exhausted' : undefined,
+      reason: pauseOrigin === 'system_entitlement' ? '运行时间余额耗尽' : undefined,
       session_window_start: lastStart.session_window_start,
       session_window_end: new Date().toISOString(),
     });

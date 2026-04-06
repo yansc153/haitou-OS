@@ -15,6 +15,8 @@ import { discoverLeverJobs, submitLeverApplication } from './executors/lever.js'
 import { discoverLinkedInJobs, submitLinkedInEasyApply } from './executors/linkedin.js';
 import { discoverZhaopinJobs, submitZhaopinApplication } from './executors/zhaopin.js';
 import { discoverLagouJobs, submitLagouApplication } from './executors/lagou.js';
+import { discoverLiepinJobs, submitLiepinApplication } from './executors/liepin.js';
+import { discoverBossJobs, sendBossGreeting } from './executors/boss-zhipin.js';
 import { downloadResumeToTemp, cleanupTempFile } from './utils/storage.js';
 import { BudgetService } from './services/budget.js';
 import { OpportunityStage, PipelineMode } from '../shared/enums.js';
@@ -24,42 +26,46 @@ const REC_ZH_MAP: Record<string, string> = {
   advance: '推荐投递', watch: '持续观望', drop: '不匹配放弃', needs_context: '需更多信息',
 };
 
-/** Industry → Greenhouse/Lever board tokens mapping */
+/** Industry → Greenhouse/Lever board tokens mapping
+ * IMPORTANT: Lever slugs are verified against https://api.lever.co/v0/postings/{slug}
+ * Only include slugs that return 200. Slugs are case-sensitive (lowercase).
+ */
 const DOMAIN_BOARD_MAP: Record<string, Array<{ token: string; company: string; platform: 'greenhouse' | 'lever' }>> = {
   fintech: [
     { token: 'stripe', company: 'Stripe', platform: 'greenhouse' },
     { token: 'square', company: 'Square', platform: 'greenhouse' },
     { token: 'coinbase', company: 'Coinbase', platform: 'greenhouse' },
     { token: 'revolut', company: 'Revolut', platform: 'greenhouse' },
-    { token: 'wise', company: 'Wise', platform: 'lever' },
     { token: 'plaid', company: 'Plaid', platform: 'lever' },
+    { token: 'wealthsimple', company: 'Wealthsimple', platform: 'lever' },
   ],
   web3: [
     { token: 'coinbase', company: 'Coinbase', platform: 'greenhouse' },
     { token: 'consensys', company: 'ConsenSys', platform: 'greenhouse' },
     { token: 'uniswaplabs', company: 'Uniswap', platform: 'greenhouse' },
     { token: 'chainalysis', company: 'Chainalysis', platform: 'greenhouse' },
-    { token: 'anchorage-digital', company: 'Anchorage', platform: 'lever' },
+    { token: 'palantir', company: 'Palantir', platform: 'lever' },
   ],
   ai: [
     { token: 'openai', company: 'OpenAI', platform: 'greenhouse' },
     { token: 'anthropic', company: 'Anthropic', platform: 'greenhouse' },
-    { token: 'huggingface', company: 'Hugging Face', platform: 'lever' },
-    { token: 'cohere', company: 'Cohere', platform: 'lever' },
     { token: 'scale', company: 'Scale AI', platform: 'greenhouse' },
     { token: 'databricks', company: 'Databricks', platform: 'greenhouse' },
+    { token: 'palantir', company: 'Palantir', platform: 'lever' },
+    { token: 'netflix', company: 'Netflix', platform: 'lever' },
   ],
   saas: [
     { token: 'notion', company: 'Notion', platform: 'greenhouse' },
-    { token: 'figma', company: 'Figma', platform: 'lever' },
     { token: 'vercel', company: 'Vercel', platform: 'greenhouse' },
     { token: 'supabase', company: 'Supabase', platform: 'greenhouse' },
-    { token: 'linear', company: 'Linear', platform: 'lever' },
-    { token: 'retool', company: 'Retool', platform: 'lever' },
+    { token: 'toptal', company: 'Toptal', platform: 'lever' },
+    { token: 'spotify', company: 'Spotify', platform: 'lever' },
+    { token: 'lever', company: 'Lever', platform: 'lever' },
   ],
   general: [
-    { token: 'Netflix', company: 'Netflix', platform: 'lever' },
-    { token: 'figma', company: 'Figma', platform: 'lever' },
+    { token: 'netflix', company: 'Netflix', platform: 'lever' },
+    { token: 'spotify', company: 'Spotify', platform: 'lever' },
+    { token: 'toptal', company: 'Toptal', platform: 'lever' },
     { token: 'notion', company: 'Notion', platform: 'greenhouse' },
     { token: 'stripe', company: 'Stripe', platform: 'greenhouse' },
     { token: 'airbnb', company: 'Airbnb', platform: 'greenhouse' },
@@ -182,6 +188,12 @@ export class PipelineOrchestrator {
             break;
           case 'lagou':
             await this.runChinaPlatformDiscovery(teamId, platform, pipelineMode, 'lagou');
+            break;
+          case 'liepin':
+            await this.runChinaPlatformDiscovery(teamId, platform, pipelineMode, 'liepin');
+            break;
+          case 'boss_zhipin':
+            await this.runBossDiscovery(teamId, platform, pipelineMode);
             break;
         }
       } catch (err) {
@@ -393,6 +405,8 @@ export class PipelineOrchestrator {
       jobs = await discoverZhaopinJobs({ sessionCookies: conn.session_token_ref, keywords: keywordList, limit: 10 });
     } else if (platformCode === 'lagou') {
       jobs = await discoverLagouJobs({ sessionCookies: conn.session_token_ref, keywords: keywordList, limit: 10 });
+    } else if (platformCode === 'liepin') {
+      jobs = await discoverLiepinJobs({ sessionCookies: conn.session_token_ref, keywords: keywordList, limit: 10 });
     }
 
     for (const job of jobs) {
@@ -422,6 +436,194 @@ export class PipelineOrchestrator {
 
       // Passthrough pipeline: screen → submit directly (no materials)
       if (opp) await this.runScreeningPipeline(teamId, opp.id, pipelineMode);
+    }
+  }
+
+  /**
+   * Boss直聘 Discovery — separate path because Boss uses chat_initiate, not browser_form.
+   * After screening, advance → runFirstContact (greeting) instead of runSubmission.
+   */
+  private async runBossDiscovery(
+    teamId: string,
+    platform: Record<string, unknown>,
+    pipelineMode: string
+  ): Promise<void> {
+    // Get session cookies
+    const { data: conn } = await this.db
+      .from('platform_connection')
+      .select('session_token_ref')
+      .eq('team_id', teamId)
+      .eq('platform_id', platform.id as string)
+      .eq('status', 'active')
+      .single();
+
+    if (!conn?.session_token_ref) return;
+
+    // Get keywords from onboarding
+    const { data: team } = await this.db.from('team').select('user_id').eq('id', teamId).single();
+    const { data: draft } = await this.db
+      .from('onboarding_draft')
+      .select('answered_fields')
+      .eq('user_id', team?.user_id)
+      .single();
+
+    const keywords = ((draft?.answered_fields as Record<string, unknown>)?.target_roles as string) || '软件工程师';
+    const keywordList = typeof keywords === 'string' ? keywords.split(',').map((k: string) => k.trim()) : [keywords];
+
+    const jobs = await discoverBossJobs({ sessionCookies: conn.session_token_ref, keywords: keywordList, limit: 10 });
+
+    for (const job of jobs) {
+      const { count } = await this.db
+        .from('opportunity')
+        .select('id', { count: 'exact', head: true })
+        .eq('team_id', teamId)
+        .eq('external_ref', job.external_ref);
+      if (count && count > 0) continue;
+
+      const { data: opp } = await this.db
+        .from('opportunity')
+        .insert({
+          team_id: teamId,
+          stage: OpportunityStage.Discovered,
+          company_name: job.company_name,
+          job_title: job.job_title,
+          location_label: job.location_label,
+          job_description_url: job.job_description_url,
+          job_description_text: job.job_description_text,
+          source_platform_id: platform.id as string,
+          external_ref: job.external_ref,
+          source_freshness: 'new',
+        })
+        .select('id')
+        .single();
+
+      // Boss pipeline: screen → greeting (not submit)
+      if (opp) await this.runBossScreeningPipeline(teamId, opp.id, platform.id as string);
+    }
+  }
+
+  /**
+   * Boss-specific screening pipeline.
+   * Same screening logic, but advance → runFirstContact instead of runSubmission.
+   */
+  private async runBossScreeningPipeline(
+    teamId: string,
+    opportunityId: string,
+    platformId: string
+  ): Promise<void> {
+    // Run standard screening (fit + conflict + recommendation)
+    await this.runScreeningPipeline(teamId, opportunityId, PipelineMode.Passthrough);
+
+    // Check if recommendation was advance → send greeting
+    const { data: opp } = await this.db
+      .from('opportunity')
+      .select('recommendation, stage, job_title, company_name, job_description_url, job_description_text, source_platform_id')
+      .eq('id', opportunityId)
+      .single();
+
+    if (opp?.recommendation === 'advance' && opp.stage === OpportunityStage.Prioritized) {
+      await this.runFirstContact(teamId, opportunityId, opp);
+    }
+  }
+
+  /**
+   * Boss直聘 First Contact — send greeting message (打招呼).
+   * This replaces runSubmission for Boss. Stage: prioritized → contact_started.
+   */
+  private async runFirstContact(
+    teamId: string,
+    opportunityId: string,
+    opportunity: Record<string, unknown>
+  ): Promise<void> {
+    // Get connection
+    const { data: connection } = await this.db
+      .from('platform_connection')
+      .select('id, session_token_ref')
+      .eq('team_id', teamId)
+      .eq('platform_id', opportunity.source_platform_id as string)
+      .eq('status', 'active')
+      .single();
+
+    if (!connection?.session_token_ref) return;
+
+    // Budget check (greetings count as 'application' in budget)
+    const budgetAllowed = await this.budget.canPerformAction(connection.id, teamId, 'boss_zhipin', 'application');
+    if (!budgetAllowed) {
+      console.log('[pipeline] Daily greeting budget exhausted for boss_zhipin');
+      await this.db.from('timeline_event').insert({
+        team_id: teamId,
+        event_type: 'budget_exhausted',
+        summary_text: '今日打招呼次数已用完 (Boss直聘)',
+        actor_type: 'system',
+        related_entity_type: 'opportunity',
+        related_entity_id: opportunityId,
+        visibility: 'feed',
+      });
+      return;
+    }
+
+    // Compose greeting message via skill
+    const greetResult = await executeSkill('boss-greeting-compose', {
+      opportunity: {
+        job_title: opportunity.job_title,
+        company_name: opportunity.company_name,
+        job_description_text: opportunity.job_description_text,
+      },
+    });
+
+    const greetingText = greetResult.success
+      ? ((greetResult.output as { greeting_text?: string }).greeting_text || `您好，我对贵司的「${opportunity.job_title}」岗位很感兴趣，希望能进一步了解。`)
+      : `您好，我对贵司的「${opportunity.job_title}」岗位很感兴趣，希望能进一步了解。`;
+
+    if (greetResult.success) {
+      await recordTokenUsage(this.db, teamId, greetResult.tokens_used.input, greetResult.tokens_used.output);
+    }
+
+    // Send greeting
+    const result = await sendBossGreeting({
+      sessionCookies: connection.session_token_ref,
+      jobDetailUrl: (opportunity.job_description_url as string) || '',
+      greetingText,
+    });
+
+    // Record budget usage on success
+    if (result.outcome === 'success') {
+      await this.budget.recordAction(connection.id, teamId, 'boss_zhipin', 'application');
+
+      // Create conversation thread
+      await this.db.from('conversation_thread').insert({
+        team_id: teamId,
+        opportunity_id: opportunityId,
+        platform_connection_id: connection.id,
+        thread_status: 'active',
+        message_count: 1,
+        latest_message_at: new Date().toISOString(),
+      });
+
+      // Transition: prioritized → contact_started
+      await this.transitionOpportunityStage(opportunityId, OpportunityStage.Prioritized, OpportunityStage.ContactStarted);
+
+      await this.db.from('timeline_event').insert({
+        team_id: teamId,
+        event_type: 'boss_greeting_sent',
+        summary_text: `已向 ${opportunity.company_name} 发送打招呼消息「${opportunity.job_title}」`,
+        actor_type: 'agent',
+        related_entity_type: 'opportunity',
+        related_entity_id: opportunityId,
+        visibility: 'feed',
+      });
+    } else {
+      console.error(`[pipeline] Boss greeting failed for ${opportunity.company_name}: ${result.errorMessage}`);
+
+      await this.db.from('timeline_event').insert({
+        team_id: teamId,
+        event_type: 'boss_greeting_failed',
+        summary_text: `打招呼失败: ${opportunity.company_name}「${opportunity.job_title}」— ${result.errorMessage}`,
+        actor_type: 'system',
+        related_entity_type: 'opportunity',
+        related_entity_id: opportunityId,
+        visibility: 'feed',
+      });
     }
   }
 
@@ -708,7 +910,7 @@ export class PipelineOrchestrator {
       await this.db.from('timeline_event').insert({
         team_id: teamId,
         event_type: 'budget_exhausted',
-        summary_text: `Daily application budget exhausted for ${platformCode}`,
+        summary_text: `今日投递次数已用完 (${platformCode})`,
         actor_type: 'system',
         related_entity_type: 'opportunity',
         related_entity_id: opportunityId,
@@ -788,6 +990,13 @@ export class PipelineOrchestrator {
 
         case 'lagou':
           result = await submitLagouApplication({
+            jobUrl: (opportunity.job_description_url as string) || '',
+            sessionCookies: connection.session_token_ref || '',
+          });
+          break;
+
+        case 'liepin':
+          result = await submitLiepinApplication({
             jobUrl: (opportunity.job_description_url as string) || '',
             sessionCookies: connection.session_token_ref || '',
           });

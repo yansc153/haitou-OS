@@ -47,7 +47,8 @@ export async function discoverLeverJobs(
   const res = await fetch(url);
 
   if (!res.ok) {
-    throw new Error(`Lever API error: ${res.status} ${res.statusText}`);
+    console.log(`[lever] API ${res.status} for ${companySlug} — skipping`);
+    return [];
   }
 
   let postings = (await res.json()) as LeverPosting[];

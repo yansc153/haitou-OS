@@ -18,6 +18,7 @@ const PLATFORM_BUDGETS: Record<string, { applications: number; messages: number;
   zhaopin: { applications: 30, messages: 0, searches: 100 },
   lagou: { applications: 30, messages: 0, searches: 100 },
   boss_zhipin: { applications: 10, messages: 5, searches: 50 },
+  liepin: { applications: 20, messages: 0, searches: 100 },
 };
 
 export class BudgetService {

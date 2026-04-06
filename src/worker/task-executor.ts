@@ -18,7 +18,7 @@ import {
 import { PipelineOrchestrator } from './pipeline.js';
 import { executeSkill } from './skills/runtime.js';
 import { HandoffDetectionService } from './services/handoff-detection.js';
-import { pollLinkedInInbox } from './executors/linkedin.js';
+import { pollBossMessages } from './executors/boss-zhipin.js';
 
 type AgentTask = {
   id: string;
@@ -437,8 +437,12 @@ export class TaskExecutor {
       .limit(1)
       .single();
 
-    if (platformDef.code === 'linkedin') {
-      const polled = await pollLinkedInInbox({ sessionCookies: conn.session_token_ref });
+    // V1: Only Boss直聘 has conversation tracking (Loop 2).
+    // All other platforms (LinkedIn, Greenhouse, Lever, 智联, 拉勾, 猎聘) stop at "submitted".
+    // English platforms: replies go to email, we don't track email.
+    // Chinese platforms (non-Boss): replies go to 站内信/APP, V1 doesn't track.
+    if (platformDef.code === 'boss_zhipin') {
+      const polled = await pollBossMessages({ sessionCookies: conn.session_token_ref });
       if (polled.length === 0) return;
 
       // Create thread if it doesn't exist
@@ -461,7 +465,7 @@ export class TaskExecutor {
 
       // Insert new messages (dedup by platform_message_id)
       for (const msg of polled) {
-        const platformMsgId = `linkedin:${msg.threadId}:${msg.receivedAt}`;
+        const platformMsgId = `boss:${msg.threadId}:${msg.receivedAt}`;
         const { count } = await this.db
           .from('conversation_message')
           .select('id', { count: 'exact', head: true })
@@ -485,7 +489,6 @@ export class TaskExecutor {
         .from('conversation_thread')
         .update({
           latest_message_at: polled[0].receivedAt,
-          message_count: thread.platform_thread_id ? undefined : polled.length,
         })
         .eq('id', thread.id);
     }
