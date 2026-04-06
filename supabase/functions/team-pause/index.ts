@@ -35,29 +35,39 @@ serve(async (req) => {
   const now = new Date().toISOString();
 
   // Record session_end in ledger
-  const { data: lastLedger } = await serviceClient
+  const { data: ledgerRows } = await serviceClient
     .from('runtime_ledger_entry')
     .select('*')
     .eq('team_id', team.id)
     .eq('entry_type', 'session_start')
     .order('created_at', { ascending: false })
-    .limit(1)
-    .single();
+    .limit(1);
+  const lastLedger = ledgerRows?.[0] ?? null;
 
   if (lastLedger) {
-    const startTime = new Date(lastLedger.session_window_start || lastLedger.created_at).getTime();
-    const durationSeconds = Math.floor((Date.now() - startTime) / 1000);
-    const newBalance = Math.max(0, lastLedger.balance_after_seconds - durationSeconds);
+    // Idempotency: skip if session_end already recorded (race with billing forced-pause)
+    const { count: existingEnd } = await serviceClient
+      .from('runtime_ledger_entry')
+      .select('id', { count: 'exact', head: true })
+      .eq('team_id', team.id)
+      .eq('entry_type', 'session_end')
+      .gt('created_at', lastLedger.created_at);
 
-    await serviceClient.from('runtime_ledger_entry').insert({
-      team_id: team.id,
-      entry_type: 'session_end',
-      runtime_delta_seconds: -durationSeconds,
-      balance_after_seconds: newBalance,
-      trigger_source: 'user',
-      session_window_start: lastLedger.session_window_start,
-      session_window_end: now,
-    });
+    if (!existingEnd || existingEnd === 0) {
+      const startTime = new Date(lastLedger.session_window_start || lastLedger.created_at).getTime();
+      const durationSeconds = Math.floor((Date.now() - startTime) / 1000);
+      const newBalance = Math.max(0, lastLedger.balance_after_seconds - durationSeconds);
+
+      await serviceClient.from('runtime_ledger_entry').insert({
+        team_id: team.id,
+        entry_type: 'session_end',
+        runtime_delta_seconds: -durationSeconds,
+        balance_after_seconds: newBalance,
+        trigger_source: 'user',
+        session_window_start: lastLedger.session_window_start,
+        session_window_end: now,
+      });
+    }
   }
 
   // Update team status
@@ -88,7 +98,7 @@ serve(async (req) => {
   await serviceClient.from('timeline_event').insert({
     team_id: team.id,
     event_type: 'team_paused',
-    summary_text: `Team paused by user. ${normalized || 0} tasks re-queued.`,
+    summary_text: `团队已暂停，${normalized || 0} 个任务已重新排队`,
     actor_type: 'user',
     visibility: 'feed',
   });

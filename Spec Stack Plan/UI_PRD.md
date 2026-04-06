@@ -183,10 +183,11 @@ Landing Page
   │     ├── Team activated, not ready → Readiness
   │     └── Team ready/active → Team Home
   │
-  ├── Onboarding Flow (3 steps):
+  ├── Onboarding Flow (4 steps):
   │     ├── Step 1: Resume Upload
-  │     ├── Step 2: Job Search Preferences
-  │     └── Step 3: Confirm & Create Team
+  │     ├── Step 2: Enable Platform Connector
+  │     ├── Step 3: Job Search Preferences
+  │     └── Step 4: Confirm & Create Team
   │
   ├── Team Activation Page
   │     └── 7 badges drop in → Confirm activation
@@ -306,10 +307,11 @@ Landing Page
 
 **Layout:** Full-screen, centered content, progress indicator at top.
 
-**Progress indicator:** 3 dots/steps, horizontally centered.
+**Progress indicator:** 4 dots/steps, horizontally centered.
 - Step 1: `上传简历` — filled when active
-- Step 2: `求职偏好` — filled when active
-- Step 3: `确认创建` — filled when active
+- Step 2: `启用连接` — filled when active
+- Step 3: `求职偏好` — filled when active
+- Step 4: `确认创建` — filled when active
 
 **Step 1: Resume Upload**
 - Headline: `上传你的简历`
@@ -320,7 +322,16 @@ Landing Page
   - States: idle → uploading (progress bar) → processing → done (green checkmark + filename)
 - `下一步` button at bottom (disabled until upload completes)
 
-**Step 2: Job Search Preferences**
+**Step 2: Enable Platform Connector**
+- Headline: `启用平台连接`
+- Subheadline: `安装浏览器助手，让团队能自动连接招聘平台`
+- Browser detection on mount:
+  - **Chromium detected** (Chrome/Edge/360/QQ): Show "安装浏览器助手" button → Chrome Web Store inline install → after install detected, button changes to ✅ `已启用` → `下一步` enabled
+  - **Non-Chromium detected** (Safari/Firefox): Show "下载海投连接助手" button → downloads native connector (V1.1; V1 shows "请使用 Chrome 或 Edge 浏览器以获得最佳体验" with download link for Chrome)
+- Skip option: `稍后设置` link (small, tertiary text) — allows proceeding without connector, but platform connection will be unavailable until installed
+- Why this step is here: platform connection in step 3 (preferences → coverage scope) and post-onboarding (platform page) both depend on the connector being available
+
+**Step 3: Job Search Preferences**
 - Headline: `告诉团队你的求职方向`
 - Subheadline: `这些偏好帮助团队校准搜索和匹配`
 - Questions rendered as cards/chips:
@@ -337,7 +348,7 @@ Landing Page
 - Choice chips: Rounded pill, `--border-default`, click to select (fills `--accent-blue`)
 - `下一步` button (disabled until required fields filled)
 
-**Step 3: Confirm & Create Team**
+**Step 4: Confirm & Create Team**
 - Headline: `确认并组建团队`
 - Summary card showing chosen preferences
 - Team roster preview: 7 agent names listed vertically (no badges yet — badges appear on activation)
@@ -499,7 +510,13 @@ Landing Page
 - Opportunity header: company, title, location, platform badge, stage badge
 - Tabs: `时间线` | `材料` | `投递记录` | `对话`
 - Timeline tab: chronological feed of all agent actions on this opportunity
-- Materials tab: list of generated resume variants, cover letters
+- Materials tab: list of generated resume variants, cover letters — **each card is clickable**
+  - Click → opens **Material Preview Drawer** (slides from right, z-60, above detail panel)
+  - Preview renders full content from `content_text`:
+    - Resume (`standard_tailored_resume`): section headings + tailored text per section + changes made
+    - Cover letter: full letter text with structured sections (opening, value proposition, closing)
+  - Footer: "复制全文" button (copies to clipboard)
+  - Empty state: "材料内容暂不可用"
 - Submissions tab: list of SubmissionAttempt records with outcomes
 - Conversation tab: message thread (if exists)
 

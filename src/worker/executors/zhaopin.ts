@@ -1,16 +1,22 @@
 /**
  * 智联招聘 (Zhaopin) Platform Executor — Passthrough Pipeline
  *
- * - Discovery: Browser-based keyword search with font-obfuscation handling
- * - Apply: Browser form submit with platform-stored online resume (no tailoring)
- * - Session: Cookie-based, browser-backed
+ * Anti-scraping: Low-Moderate | Session: cookie | Headless: Yes
+ * Apply method: browser_form | Pipeline: passthrough (no material generation)
+ * Daily budget: 30 | Delays: 2-5s
  *
- * IMPORTANT: Passthrough pipeline — no material generation.
- * The user's original resume is used directly.
+ * Per spec mandatory non-goals:
+ * - Do NOT build 招聘关系经理 around 智联网页聊天
+ * - Treat 立即沟通 as app-gated / partial
  *
  * Source: PLATFORM_RULE_AND_AGENT_SPEC.md § 智联招聘
- * Source: Platform Research § Experiments Z1-Z8
  */
+
+import { createContext, randomDelay } from '../utils/browser-pool.js';
+import type { Page } from 'playwright';
+
+const DAILY_BUDGET = { applications: 30 };
+const DELAY = { page: [2000, 5000] as const, click: [1000, 2000] as const };
 
 type ZhaopinJob = {
   job_title: string;
@@ -22,17 +28,9 @@ type ZhaopinJob = {
   external_ref: string;
 };
 
-const DAILY_BUDGET = { applications: 30 };
-const DELAY_RANGE = { pageLoad: [2000, 5000], click: [1000, 2000] } as const;
-
 /**
  * Discover jobs via 智联 keyword search.
- * Requires active cookie session.
- *
- * Known platform behavior:
- * - Font obfuscation on salary/text fields (custom web fonts)
- * - Search works on both www.zhaopin.com and sou.zhaopin.com
- * - Detail pages are stable once position IDs are known
+ * Requires active cookie session (both www.zhaopin.com and i.zhaopin.com).
  */
 export async function discoverZhaopinJobs(params: {
   sessionCookies: string;
@@ -40,60 +38,196 @@ export async function discoverZhaopinJobs(params: {
   city?: string;
   limit?: number;
 }): Promise<ZhaopinJob[]> {
-  console.log(`[zhaopin] Stub discovery: keywords=${params.keywords.join(', ')}, city=${params.city || 'all'}`);
-  // Real implementation:
-  // 1. Launch Playwright with injected cookies (www.zhaopin.com + i.zhaopin.com)
-  // 2. Navigate to search page with keyword params
-  // 3. Extract job cards (handle font obfuscation for salary)
-  // 4. For each card: extract title, company, location, salary, detail URL
-  // 5. Navigate to detail pages for full JD text
-  return [];
+  const limit = params.limit ?? 10;
+  const context = await createContext({ cookies: params.sessionCookies });
+  const page = await context.newPage();
+
+  try {
+    const keyword = params.keywords.join(' ');
+    const searchUrl = `https://sou.zhaopin.com/?kw=${encodeURIComponent(keyword)}${params.city ? `&ct=${encodeURIComponent(params.city)}` : ''}`;
+
+    await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await randomDelay(DELAY.page[0], DELAY.page[1]);
+
+    // Check for login redirect
+    if (isLoginPage(page)) {
+      console.warn('[zhaopin] Session expired — login redirect');
+      return [];
+    }
+
+    const jobs: ZhaopinJob[] = [];
+    const cards = page.locator('.joblist-box__item, .contentpile__content__wrapper__item');
+    const count = Math.min(await cards.count(), limit);
+
+    for (let i = 0; i < count; i++) {
+      try {
+        const card = cards.nth(i);
+        await card.scrollIntoViewIfNeeded();
+
+        const title = await card.locator('.iteminfo__line1__jobname, a[data-at="job-name"]').first().textContent() || '';
+        const company = await card.locator('.iteminfo__line1__compname, a[data-at="company-name"]').first().textContent() || '';
+        const location = await card.locator('.iteminfo__line2__jobdesc span').first().textContent() || '';
+        // Salary may be font-obfuscated — extract raw text (may be garbled)
+        const salary = await card.locator('.iteminfo__line2__jobdesc__salary, .iteminfo__line1__salary').first().textContent().catch(() => '') || '';
+
+        const linkEl = card.locator('a[href*="jobs.zhaopin.com"], a[href*="/jobdetail"]').first();
+        const href = await linkEl.getAttribute('href') || '';
+
+        // Extract job ID from URL
+        const jobId = href.match(/\/(\d+)\.htm/)?.[1] || href.match(/jobid=(\d+)/i)?.[1] || `zhaopin-${i}`;
+
+        if (title.trim()) {
+          jobs.push({
+            job_title: title.trim(),
+            company_name: company.trim(),
+            location_label: location.trim(),
+            salary_text: salary.trim() || undefined,
+            job_description_url: href.startsWith('http') ? href : `https://jobs.zhaopin.com/${jobId}.htm`,
+            job_description_text: '', // Loaded on detail page
+            external_ref: `zhaopin:${jobId}`,
+          });
+        }
+      } catch { /* skip card */ }
+    }
+
+    // Load JD text for top results
+    for (const job of jobs.slice(0, 5)) {
+      try {
+        await page.goto(job.job_description_url, { waitUntil: 'domcontentloaded', timeout: 15000 });
+        await randomDelay(DELAY.page[0], DELAY.page[1]);
+        const jd = await page.locator('.describtion__detail-content, .job-detail__content, .pos-ul').first().textContent();
+        job.job_description_text = jd?.trim() || '';
+      } catch { /* skip detail */ }
+    }
+
+    return jobs;
+
+  } catch (err) {
+    console.error(`[zhaopin] Discovery error: ${err instanceof Error ? err.message : err}`);
+    return [];
+  } finally {
+    await page.close();
+    await context.close();
+  }
 }
 
 /**
  * Submit application via 智联 web apply.
- * Uses the platform's online resume — no file upload needed.
+ * Passthrough: uses platform-stored online resume, no file upload.
  *
- * Validated behavior from research:
- * - Click 立即投递 on detail page
- * - Page state changes to 已投递 on success
- * - No blocking confirmation step observed in tested samples
+ * Flow: Navigate detail → check 已投递 dedup → click 立即投递 → detect 已投递
  */
 export async function submitZhaopinApplication(params: {
   sessionCookies: string;
-  jobDetailUrl: string;
+  jobUrl: string;
 }): Promise<{
   outcome: 'success' | 'soft_failure' | 'hard_failure';
   confirmationSignal?: string;
   errorMessage?: string;
 }> {
-  console.log(`[zhaopin] Stub apply to: ${params.jobDetailUrl}`);
-  // Real implementation:
-  // 1. Navigate to job detail page with cookies
-  // 2. Check for 已投递 state (dedup)
-  // 3. Click 立即投递
-  // 4. Detect state change to 已投递
-  // 5. Handle possible CAPTCHA (image CAPTCHA, rare)
-  return {
-    outcome: 'success',
-    confirmationSignal: 'Stub: 智联 application submitted (已投递)',
-  };
+  const context = await createContext({ cookies: params.sessionCookies });
+  const page = await context.newPage();
+
+  try {
+    await page.goto(params.jobUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await randomDelay(DELAY.page[0], DELAY.page[1]);
+
+    if (isLoginPage(page)) {
+      return { outcome: 'hard_failure', errorMessage: 'Session expired' };
+    }
+
+    // Check for 已投递 (already applied)
+    const pageText = await page.textContent('body') || '';
+    if (/已投递|已申请/.test(pageText)) {
+      return { outcome: 'soft_failure', errorMessage: 'Already applied (已投递)' };
+    }
+
+    // Click 立即投递 button
+    const applyBtn = page.locator('button:has-text("立即投递"), a:has-text("立即投递"), button:has-text("申请职位"), .apply-btn').first();
+    if (!(await applyBtn.isVisible({ timeout: 5000 }).catch(() => false))) {
+      return { outcome: 'soft_failure', errorMessage: '立即投递 button not found' };
+    }
+
+    await applyBtn.click();
+    await randomDelay(DELAY.page[0], DELAY.page[1]);
+
+    // Detect success: page should now show 已投递
+    const newPageText = await page.textContent('body') || '';
+    if (/已投递|投递成功|申请成功/.test(newPageText)) {
+      return { outcome: 'success', confirmationSignal: '已投递 state detected' };
+    }
+
+    // Check for resume selection dialog
+    const resumeDialog = page.locator('.resume-select, .deliver-dialog').first();
+    if (await resumeDialog.isVisible().catch(() => false)) {
+      // Select first resume and confirm
+      const firstResume = resumeDialog.locator('input[type="radio"], .resume-item').first();
+      if (await firstResume.isVisible().catch(() => false)) {
+        await firstResume.click();
+        await randomDelay(DELAY.click[0], DELAY.click[1]);
+      }
+      const confirmBtn = resumeDialog.locator('button:has-text("确定"), button:has-text("投递")').first();
+      if (await confirmBtn.isVisible().catch(() => false)) {
+        await confirmBtn.click();
+        await randomDelay(DELAY.page[0], DELAY.page[1]);
+      }
+
+      const finalText = await page.textContent('body') || '';
+      if (/已投递|投递成功/.test(finalText)) {
+        return { outcome: 'success', confirmationSignal: '已投递 after resume selection' };
+      }
+    }
+
+    return { outcome: 'soft_failure', errorMessage: 'Apply clicked but no 已投递 confirmation' };
+
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error';
+    console.error(`[zhaopin] Submit error: ${msg}`);
+    return { outcome: 'soft_failure', errorMessage: msg };
+
+  } finally {
+    await page.close();
+    await context.close();
+  }
 }
 
 /**
- * Check capability-level health for 智联.
- * Tests search, detail, apply, resume separately.
+ * Capability-level health check.
  */
 export async function checkZhaopinCapabilityHealth(params: {
   sessionCookies: string;
 }): Promise<Record<string, 'healthy' | 'degraded' | 'blocked' | 'unknown'>> {
-  console.log(`[zhaopin] Stub capability health check`);
-  // Real implementation: lightweight probes per capability
-  return {
-    search: 'unknown',
-    detail: 'unknown',
-    apply: 'unknown',
-    chat: 'unknown',
-    resume: 'unknown',
+  const context = await createContext({ cookies: params.sessionCookies });
+  const page = await context.newPage();
+  const caps: Record<string, 'healthy' | 'degraded' | 'blocked' | 'unknown'> = {
+    search: 'unknown', detail: 'unknown', apply: 'unknown', chat: 'unknown', resume: 'unknown',
   };
+
+  try {
+    // Probe search
+    await page.goto('https://sou.zhaopin.com/?kw=test', { waitUntil: 'domcontentloaded', timeout: 15000 });
+    caps.search = isLoginPage(page) ? 'blocked' : 'healthy';
+
+    if (caps.search === 'healthy') {
+      // Probe detail (use first result link)
+      const firstLink = await page.locator('a[href*="jobs.zhaopin.com"]').first().getAttribute('href').catch(() => null);
+      if (firstLink) {
+        await page.goto(firstLink, { waitUntil: 'domcontentloaded', timeout: 15000 });
+        const hasJd = await page.locator('.describtion__detail-content, .job-detail__content').first().isVisible().catch(() => false);
+        caps.detail = hasJd ? 'healthy' : 'degraded';
+      }
+    }
+  } catch {
+    // Leave as unknown
+  } finally {
+    await page.close();
+    await context.close();
+  }
+
+  return caps;
+}
+
+function isLoginPage(page: Page): boolean {
+  const url = page.url();
+  return url.includes('/login') || url.includes('/passport') || url.includes('/loginPage');
 }

@@ -1,12 +1,18 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 
-const PUBLIC_PATHS = ['/login', '/auth/callback', '/landing', '/preview',
-  // Dev preview: allow all app pages without auth
-  '/home', '/opportunities', '/handoffs', '/platforms', '/billing', '/settings',
-  '/activation', '/readiness', '/resume', '/questions', '/complete',
-  '/legal',
-];
+const PUBLIC_PATHS = ['/login', '/auth/callback', '/landing', '/preview', '/legal', '/api/resume-preview'];
+
+// Pre-compute expected admin token at module load (Edge Runtime compatible)
+let _adminTokenCache: string | null = null;
+async function getAdminToken(): Promise<string> {
+  if (_adminTokenCache) return _adminTokenCache;
+  const secret = process.env.ADMIN_SECRET || 'haitou-admin-2026';
+  const data = new TextEncoder().encode(`admin:${secret}:salt-haitou`);
+  const hash = await crypto.subtle.digest('SHA-256', data);
+  _adminTokenCache = Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
+  return _adminTokenCache;
+}
 
 export async function middleware(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
@@ -51,6 +57,17 @@ export async function middleware(request: NextRequest) {
     const url = request.nextUrl.clone();
     url.pathname = '/';
     return NextResponse.redirect(url);
+  }
+
+  // Admin route protection: requires admin_token cookie (set via /admin-login)
+  if (pathname.startsWith('/admin') && !pathname.startsWith('/admin-login')) {
+    const adminToken = request.cookies.get('admin_token')?.value;
+    const expected = await getAdminToken();
+    if (adminToken !== expected) {
+      const url = request.nextUrl.clone();
+      url.pathname = '/admin-login';
+      return NextResponse.redirect(url);
+    }
   }
 
   return supabaseResponse;

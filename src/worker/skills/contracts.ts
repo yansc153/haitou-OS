@@ -13,6 +13,7 @@ export type SkillContract = {
   modelTier: 'tier1' | 'tier2' | 'tier3' | 'tier4';
   maxOutputTokens: number;
   systemPrompt: string;
+  requiredFields: string[];
 };
 
 const TRUTHFULNESS_LOCK = `ABSOLUTE RULE: You must never invent, fabricate, or assume information not present in the provided context. If a field cannot be determined from the input, mark it as null or "unknown". Hallucinating data is the single most harmful failure mode.`;
@@ -25,6 +26,7 @@ export const PROMPT_CONTRACTS: Record<string, SkillContract> = {
     skillCode: 'fit-evaluation',
     modelTier: 'tier1',
     maxOutputTokens: 2048,
+    requiredFields: ['fit_posture', 'fit_reason_tags', 'dimension_scores'],
     systemPrompt: `You are a job fit evaluation engine for an automated job search system. Your job is to assess how well a specific job opportunity matches a candidate's profile.
 
 ${TRUTHFULNESS_LOCK}
@@ -62,6 +64,7 @@ Respond with a single JSON object. No markdown, no explanation.`,
     skillCode: 'conflict-detection',
     modelTier: 'tier1',
     maxOutputTokens: 1024,
+    requiredFields: ['detected_conflicts', 'conflict_severity'],
     systemPrompt: `You are a conflict detection engine. Identify meaningful conflicts between a job opportunity and a candidate's constraints.
 
 ${TRUTHFULNESS_LOCK}
@@ -89,6 +92,7 @@ Respond with a single JSON object. No markdown, no explanation.`,
     skillCode: 'recommendation-generation',
     modelTier: 'tier1',
     maxOutputTokens: 1024,
+    requiredFields: ['recommendation', 'recommendation_reason_tags', 'next_step_hint'],
     systemPrompt: `You are the recommendation engine for an automated job search system. Make the final advance/watch/drop decision.
 
 ${TRUTHFULNESS_LOCK}
@@ -117,6 +121,7 @@ Respond with a single JSON object. No markdown, no explanation.`,
     skillCode: 'truthful-rewrite',
     modelTier: 'tier2',
     maxOutputTokens: 2048,
+    requiredFields: ['tailored_sections', 'emphasis_strategy'],
     systemPrompt: `You are a resume tailoring engine. Adapt a candidate's resume for a specific job while maintaining absolute factual accuracy.
 
 ${TRUTHFULNESS_LOCK}
@@ -152,6 +157,7 @@ Respond with a single JSON object. No markdown, no explanation.`,
     skillCode: 'cover-letter-generation',
     modelTier: 'tier2',
     maxOutputTokens: 2048,
+    requiredFields: ['full_text', 'target_language'],
     systemPrompt: `You are a cover letter generation engine. Write a professional cover letter connecting the candidate's experience to the role.
 
 ${TRUTHFULNESS_LOCK}
@@ -183,6 +189,7 @@ Respond with a single JSON object. No markdown, no explanation.`,
     skillCode: 'submission-planning',
     modelTier: 'tier2',
     maxOutputTokens: 1024,
+    requiredFields: ['submission_mode', 'required_assets', 'proceed_allowed'],
     systemPrompt: `You are a submission planning engine. Determine the safest way to submit an application.
 
 Return a JSON object:
@@ -209,6 +216,7 @@ Respond with a single JSON object. No markdown, no explanation.`,
     skillCode: 'summary-generation',
     modelTier: 'tier3',
     maxOutputTokens: 512,
+    requiredFields: ['summary_text', 'tone'],
     systemPrompt: `You are a summary generation engine. Produce concise, human-readable summaries for a job search activity feed.
 
 Return a JSON object:
@@ -230,6 +238,7 @@ Respond with a single JSON object. No markdown, no explanation.`,
     skillCode: 'first-contact-drafting',
     modelTier: 'tier2',
     maxOutputTokens: 1024,
+    requiredFields: ['draft_text', 'compliance_status'],
     systemPrompt: `You are a first-contact message drafting engine. Write the initial outreach to a recruiter.
 
 ${TRUTHFULNESS_LOCK}
@@ -258,6 +267,7 @@ Respond with a single JSON object. No markdown, no explanation.`,
     skillCode: 'reply-reading',
     modelTier: 'tier1',
     maxOutputTokens: 1024,
+    requiredFields: ['reply_posture', 'handoff_recommended'],
     systemPrompt: `You are a recruiter reply analysis engine. Interpret a recruiter's message and extract structured signals.
 
 ${LANGUAGE_AWARENESS}
@@ -290,6 +300,7 @@ Respond with a single JSON object. No markdown, no explanation.`,
     skillCode: 'execution-result-recording',
     modelTier: 'tier4',
     maxOutputTokens: 1024,
+    requiredFields: ['execution_outcome', 'should_retry'],
     systemPrompt: `You are a submission result recording engine. Classify the outcome of a platform submission attempt.
 
 Return a JSON object:
@@ -307,6 +318,78 @@ RULES:
 - "success" only with clear positive signal
 - "uncertain" if page changed but no clear confirmation
 - should_retry=true only for soft_failure
+
+Respond with a single JSON object. No markdown, no explanation.`,
+  },
+
+  'resume-parse': {
+    skillCode: 'resume-parse',
+    modelTier: 'tier4',
+    maxOutputTokens: 2048,
+    requiredFields: ['parse_status', 'extracted_sections'],
+    systemPrompt: `You are a resume parsing engine. Your job is to extract structured content from a resume document.
+
+TASK:
+Given the raw text content of a resume file, extract all identifiable sections in their original order. Preserve the distinction between section names and section content.
+
+INPUT:
+You will receive: file_type, raw_text, locale_hint (optional).
+
+OUTPUT CONTRACT:
+Return a JSON object:
+{
+  "parse_status": "success" | "partial" | "failed",
+  "extracted_sections": [
+    { "section_name": "<heading>", "raw_text": "<content>", "order_index": <int> }
+  ],
+  "layout_hints": { "page_count": <n|null>, "bullet_usage": <bool>, "column_hint": "single"|"double"|"mixed"|null, "likely_has_photo": <bool> },
+  "missing_or_uncertain_fields": ["<field names>"],
+  "summary_text": "<1-2 sentence summary>"
+}
+
+${TRUTHFULNESS_LOCK}
+${LANGUAGE_AWARENESS}
+
+FORBIDDEN: Do not invent content. Do not rewrite resume text. Do not merge distinct sections. Do not guess contact info.
+
+Respond with a single JSON object. No markdown, no explanation.`,
+  },
+
+  'profile-extraction': {
+    skillCode: 'profile-extraction',
+    modelTier: 'tier4',
+    maxOutputTokens: 2048,
+    requiredFields: ['experiences', 'skills', 'parse_confidence'],
+    systemPrompt: `You are a profile extraction engine for a job search automation system. Create a structured professional profile from parsed resume sections.
+
+INPUT: extracted_sections array from resume-parse output, locale_hint (optional).
+
+OUTPUT CONTRACT:
+Return a JSON object:
+{
+  "full_name": "<string|null>", "contact_email": "<string|null>", "contact_phone": "<string|null>",
+  "current_location": "<string|null>", "nationality": "<string|null>",
+  "years_of_experience": <number|null>, "seniority_level": "<junior|mid|senior|lead|executive|null>",
+  "primary_domain": "<string|null>", "headline_summary": "<1-2 sentence summary>",
+  "experiences": [{"company_name":"","job_title":"","start_date":"YYYY-MM|null","end_date":"YYYY-MM|null","is_current":false,"location":"","description_summary":"","key_achievements":[]}],
+  "education": [{"institution":"","degree":"","field_of_study":"","start_date":"","end_date":""}],
+  "skills": ["<string>"],
+  "languages": [{"language":"","proficiency":"native|fluent|professional|conversational|basic"}],
+  "certifications": ["<string>"],
+  "inferred_role_directions": ["<string>"], "capability_tags": ["<string>"], "capability_gaps": ["<string>"],
+  "source_language": "zh"|"en"|"bilingual", "parse_confidence": "high"|"medium"|"low",
+  "factual_gaps": ["<string>"], "summary_text": "<2-3 sentence summary>"
+}
+
+${TRUTHFULNESS_LOCK}
+${LANGUAGE_AWARENESS}
+
+QUALITY RULES:
+- Every field must come from the resume content. If not present, use null.
+- years_of_experience: calculate from dates. If missing, use null.
+- parse_confidence: "high" if most fields populated, "medium" if gaps, "low" if sparse.
+
+FORBIDDEN: Do not invent experience, education, or skills. Do not fabricate contact info.
 
 Respond with a single JSON object. No markdown, no explanation.`,
   },

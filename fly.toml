@@ -1,21 +1,26 @@
 # Fly.io configuration for orchestration worker
 app = "haitou-os-worker"
-primary_region = "hkg"  # Hong Kong — close to both Chinese and global platforms
+primary_region = "sin"
 
 [build]
   dockerfile = "src/worker/Dockerfile"
 
 [env]
   NODE_ENV = "production"
+  HEALTH_PORT = "8080"
 
 [[services]]
   internal_port = 8080
   protocol = "tcp"
+  processes = ["worker"]
 
   [[services.ports]]
     port = 80
+    handlers = ["http"]
 
-# Worker is a long-running process, not a web server.
-# Fly.io keeps it alive as long as the process runs.
+  [[services.tcp_checks]]
+    interval = "15s"
+    timeout = "5s"
+
 [processes]
   worker = "node dist/worker/index.js"

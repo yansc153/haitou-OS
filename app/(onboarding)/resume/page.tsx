@@ -24,7 +24,9 @@ export default function OnboardingPage() {
   const [cities, setCities] = useState<string[]>([]);
   const [workMode, setWorkMode] = useState('hybrid');
   const [strategy, setStrategy] = useState('balanced');
+  const [targetRoles, setTargetRoles] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
   const router = useRouter();
 
   const handleFile = useCallback((f: File) => {
@@ -34,29 +36,51 @@ export default function OnboardingPage() {
 
   const handleSubmit = async () => {
     setSubmitting(true);
+    setError('');
     try {
       const { createClient } = await import('@/lib/supabase/client');
+      const { getValidSession } = await import('@/lib/hooks/use-api');
       const supabase = createClient();
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session && file) {
-        const formData = new FormData();
-        formData.append('file', file);
-        await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/onboarding-resume`, {
-          method: 'POST', headers: { Authorization: `Bearer ${session.access_token}` }, body: formData,
-        });
-        await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/onboarding-draft`, {
-          method: 'PATCH',
-          headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ answers: { target_locations: cities.join(','), work_mode: workMode, strategy_mode: strategy } }),
-        });
-        await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/onboarding-complete`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
-        });
+      const session = await getValidSession(supabase);
+      if (!session || !file) { setError('请先登录并上传简历'); setSubmitting(false); return; }
+
+      // Step 1: Upload resume
+      const formData = new FormData();
+      formData.append('file', file);
+      const r1 = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/onboarding-resume`, {
+        method: 'POST', headers: { Authorization: `Bearer ${session.access_token}` }, body: formData,
+      });
+      if (!r1.ok) {
+        const j = await r1.json().catch(() => ({}));
+        setError(`简历上传失败: ${j.error?.message || r1.status}`); setSubmitting(false); return;
       }
-    } catch { /* demo mode */ }
-    setSubmitting(false);
-    router.push('/activation');
+
+      // Step 2: Save answers
+      const r2 = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/onboarding-draft`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ answers: { target_roles: targetRoles, target_locations: cities.join(','), work_mode: workMode, strategy_mode: strategy, coverage_scope: 'cross_market' } }),
+      });
+      if (!r2.ok) {
+        const j = await r2.json().catch(() => ({}));
+        setError(`保存偏好失败: ${j.error?.message || r2.status}`); setSubmitting(false); return;
+      }
+
+      // Step 3: Complete onboarding → create team
+      const r3 = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/onboarding-complete`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+      });
+      if (!r3.ok) {
+        const j = await r3.json().catch(() => ({}));
+        setError(`创建团队失败: ${j.error?.message || r3.status}`); setSubmitting(false); return;
+      }
+
+      router.push('/home');
+    } catch (e) {
+      setError(`请求失败: ${e instanceof Error ? e.message : '未知错误'}`);
+      setSubmitting(false);
+    }
   };
 
   const ScoutAvatar = PIXEL_AVATARS['opportunity_research'];
@@ -112,7 +136,22 @@ export default function OnboardingPage() {
             </div>
           </AnimatedContent>
 
-          {/* Section 2: Location + Work Mode — side by side */}
+          {/* Section 2: Target Roles */}
+          <AnimatedContent delay={0.08}>
+            <div>
+              <h2 className="text-2xl font-display font-bold mb-2">目标岗位</h2>
+              <p className="text-sm text-muted-foreground mb-5">你想找什么类型的工作？</p>
+              <input
+                type="text"
+                placeholder="例如：后端工程师, 产品经理, 数据分析师"
+                value={targetRoles}
+                onChange={(e) => setTargetRoles(e.target.value)}
+                className="w-full px-5 py-3.5 text-base bg-surface-low rounded-xl border-0 focus:outline-none focus:ring-2 focus:ring-secondary"
+              />
+            </div>
+          </AnimatedContent>
+
+          {/* Section 3: Location + Work Mode — side by side */}
           <AnimatedContent delay={0.1}>
             <div className="grid grid-cols-2 gap-8">
               <div>
@@ -148,7 +187,7 @@ export default function OnboardingPage() {
             </div>
           </AnimatedContent>
 
-          {/* Section 3: Strategy — full-width cards */}
+          {/* Section 4: Strategy — full-width cards */}
           <AnimatedContent delay={0.15}>
             <div className="surface-low rounded-2xl p-8">
               <h2 className="text-2xl font-display font-bold mb-2">执行策略</h2>
@@ -158,7 +197,7 @@ export default function OnboardingPage() {
                   <SpotlightCard
                     key={s.value}
                     onClick={() => setStrategy(s.value)}
-                    className={`bg-white rounded-2xl p-6 text-left cursor-pointer transition-all ${
+                    className={`bg-background rounded-2xl p-6 text-left cursor-pointer transition-all ${
                       strategy === s.value ? 'ring-2 ring-foreground shadow-lifted -translate-y-0.5' : 'ghost-border hover:shadow-card hover:-translate-y-0.5'
                     }`}
                   >
@@ -195,6 +234,12 @@ export default function OnboardingPage() {
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">目标岗位</span>
+                  <span className={`text-sm ${targetRoles.trim() ? 'font-bold' : 'text-muted-foreground/40'}`}>
+                    {targetRoles.trim() ? '已填写' : '未填写'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
                   <span className="text-sm text-muted-foreground">目标城市</span>
                   <span className={`text-sm ${cities.length > 0 ? 'font-bold' : 'text-muted-foreground/40'}`}>
                     {cities.length > 0 ? `${cities.length} 个城市` : '未选择'}
@@ -208,10 +253,13 @@ export default function OnboardingPage() {
 
               <div className="h-px bg-border/20 my-5" />
 
+              {/* Error */}
+              {error && <p className="text-sm text-destructive bg-destructive/10 px-4 py-3 rounded-xl">{error}</p>}
+
               {/* Submit */}
               <button
                 onClick={handleSubmit}
-                disabled={uploadState !== 'done' || submitting}
+                disabled={uploadState !== 'done' || !targetRoles.trim() || submitting}
                 className="w-full py-3.5 bg-foreground text-background rounded-xl text-base font-bold hover:opacity-90 transition-opacity disabled:opacity-30"
               >
                 {submitting ? '正在配置...' : '完成配置 →'}

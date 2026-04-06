@@ -47,6 +47,19 @@ export class BillingService {
 
     if (!lastStart) return;
 
+    // Idempotency: check if session_end already exists after this session_start
+    const { count: existingEnd } = await this.db
+      .from('runtime_ledger_entry')
+      .select('id', { count: 'exact', head: true })
+      .eq('team_id', teamId)
+      .eq('entry_type', 'session_end')
+      .gt('created_at', lastStart.created_at);
+
+    if (existingEnd && existingEnd > 0) {
+      console.log(`[billing] session_end already recorded for team ${teamId}, skipping`);
+      return;
+    }
+
     const startTime = new Date(lastStart.session_window_start || lastStart.created_at).getTime();
     const now = Date.now();
     const durationSeconds = Math.floor((now - startTime) / 1000);
@@ -87,19 +100,31 @@ export class BillingService {
   async getEffectiveBalance(teamId: string): Promise<number> {
     const lastBalance = await this.getLastBalance(teamId);
 
-    // Check if there's an open session (session_start without matching session_end)
-    const { data: lastEntry } = await this.db
+    // Find the most recent session_start (not just the most recent entry of any type)
+    const { data: lastSessionStart } = await this.db
       .from('runtime_ledger_entry')
       .select('entry_type, session_window_start, created_at')
       .eq('team_id', teamId)
+      .eq('entry_type', 'session_start')
       .order('created_at', { ascending: false })
       .limit(1)
       .single();
 
-    if (lastEntry?.entry_type === 'session_start') {
-      const startTime = new Date(lastEntry.session_window_start || lastEntry.created_at).getTime();
-      const elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
-      return Math.max(0, lastBalance - elapsedSeconds);
+    // Check if there's a session_end after the session_start
+    if (lastSessionStart) {
+      const { count: endAfterStart } = await this.db
+        .from('runtime_ledger_entry')
+        .select('id', { count: 'exact', head: true })
+        .eq('team_id', teamId)
+        .eq('entry_type', 'session_end')
+        .gt('created_at', lastSessionStart.created_at);
+
+      // Open session: deduct elapsed time
+      if (!endAfterStart || endAfterStart === 0) {
+        const startTime = new Date(lastSessionStart.session_window_start || lastSessionStart.created_at).getTime();
+        const elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
+        return Math.max(0, lastBalance - elapsedSeconds);
+      }
     }
 
     return lastBalance;
@@ -156,7 +181,7 @@ export class BillingService {
     await this.db.from('timeline_event').insert({
       team_id: teamId,
       event_type: 'team_forced_pause',
-      summary_text: 'Team paused: runtime balance exhausted. Add more runtime to continue.',
+      summary_text: '运行时间已用尽，团队已自动暂停。请充值以继续。',
       actor_type: 'system',
       visibility: 'feed',
     });

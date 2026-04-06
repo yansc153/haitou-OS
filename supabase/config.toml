@@ -1,5 +1,4 @@
-[project]
-id = "haitou-os-local"
+project_id = "rlpipofmnqveughopxud"
 
 [api]
 enabled = true

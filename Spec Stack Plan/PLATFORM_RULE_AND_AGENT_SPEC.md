@@ -506,6 +506,58 @@ The executor system requires the following infrastructure components:
 
 These components are deployed alongside the orchestration worker on Fly.io.
 
+### Stealth Anti-Detection Module
+
+**Source:** Adapted from OpenCLI (jackwener/opencli) `src/browser/stealth.ts`.
+
+Every Playwright browser context created by `browser-pool.ts` MUST inject the stealth module before page scripts run. This is the single most critical defense against platform session bans.
+
+**Implementation:** `src/worker/utils/stealth.ts` exports `generateStealthJs()` → returns a self-contained JS string injected via `page.addInitScript()`.
+
+**Patches applied (13 layers):**
+
+1. `navigator.webdriver` → `false` (most common Playwright detection)
+2. `window.chrome` stub with `runtime`, `loadTimes`, `csi` (headless Chrome lacks this)
+3. `navigator.plugins` fake population (PDF Viewer family, only if empty)
+4. `navigator.languages` guarantee non-empty (`['en-US', 'en']`)
+5. `Permissions.query` normalization (headless throws on notifications)
+6. Automation artifact cleanup (`window.__playwright`, `__puppeteer`, `cdc_*` globals)
+7. Error stack trace sanitization (filter CDP patterns: `puppeteer_evaluation_script`, `pptr:`, `debugger://`)
+8. `Function.prototype.toString` disguise via WeakMap (patched functions report `[native code]`)
+9. Anti-debugger statement stripping (patch `Function` constructor + `eval` to remove `debugger;`)
+10. Console method fingerprinting defense (re-wrap CDP-replaced methods)
+11. `window.outerWidth/outerHeight` defense (DevTools dimension delta detection)
+12. Performance API cleanup (filter suspicious resource entries)
+13. Iframe `contentWindow.chrome` consistency (match parent context)
+
+**Guard mechanism:** Double-injection prevention via non-enumerable property on `EventTarget.prototype`.
+
+**Integration point:** `browser-pool.ts:createContext()` must call `page.addInitScript(generateStealthJs())` on every new page before any navigation.
+
+**Impact:** Applies to ALL users' automation tasks — every browser context across every platform benefits. This is a platform-wide defense.
+
+### Auth Strategy Cascade
+
+**Source:** Adapted from OpenCLI (jackwener/opencli) `src/cascade.ts`.
+
+When the health check system probes a platform session, it should use an automatic strategy downgrade chain instead of simple cookie-only probing:
+
+**Strategy order (simplest → most complex):**
+
+1. **PUBLIC** — Unauthenticated fetch. If it returns data, the endpoint is public.
+2. **COOKIE** — `credentials: 'include'`. Standard session cookie auth.
+3. **HEADER** — Cookie + CSRF token extraction. Reads `ct0=`, `csrf_token=`, `_csrf=` from `document.cookie`, injects as `X-Csrf-Token` / `X-XSRF-Token`.
+4. **INTERCEPT** — Platform-specific implementation (e.g., Boss直聘 WebSocket auth).
+5. **UI** — Requires browser interaction (fallback, not auto-tested).
+
+**Integration points:**
+- `platform-health-check`: Replace simple fetch probe with cascade probe. Each capability (`search`, `detail`, `apply`, `chat`, `resume`) gets its own cascade result with confidence score.
+- `executor` layer: When an executor encounters a 403/CSRF error mid-action, auto-escalate to HEADER strategy before failing.
+
+**Confidence scoring:** Earlier strategies get higher confidence (1.0 → 0.7). If all fail, default to COOKIE at 0.3 confidence.
+
+**Chinese platform note:** The cascade must check for API-level error codes (`json.code !== 0`) common on Chinese platforms, not just HTTP status.
+
 ### Executor Isolation
 
 Each platform executor runs independently:
@@ -563,20 +615,117 @@ User authorizes platform via browser extension
 
 ### Cookie Extraction Methods
 
-**V1: Browser extension**
+**V1: Browser Bridge Extension (externally_connectable)**
 
-1. User installs Haitou OS browser extension
-2. User logs into the platform normally in their browser
-3. Extension detects login completion and extracts relevant cookies
-4. Extension sends cookies to backend over TLS with a one-time authorization code
-5. Backend validates the code, encrypts cookies, stores reference
-6. Extension confirms success; user sees "platform connected"
+**Source:** Architecture adapted from OpenCLI (jackwener/opencli) Browser Bridge pattern.
+
+The extension operates as an invisible bridge — users never interact with it directly. All interaction happens in the web app.
+
+**Flow (user clicks "连接" on platforms page):**
+
+1. Web app calls `chrome.runtime.sendMessage(EXTENSION_ID, { action: 'getCookies', platform })` via `externally_connectable` API
+2. Extension reads platform cookies via `chrome.cookies.getAll({ domain })` scoped to the platform domain
+3. Extension filters for key auth cookies (LinkedIn: `li_at`, `JSESSIONID`; Boss: `__zp_stoken__`, `wt2`; others: all cookies)
+4. If key cookies found → returns immediately (user was already logged in → **秒连**)
+5. If no cookies → extension opens platform login page via `chrome.tabs.create()` and monitors `chrome.cookies.onChanged`
+6. When key cookie appears (user completed login) → auto-returns cookies to web app
+7. Web app sends cookies to `POST /platform-connect` (existing endpoint, no changes)
+8. Backend encrypts via Vault, stores in `platform_connection.session_token_ref`
+
+**Extension manifest (MV3):**
+- Permissions: `cookies` only (minimum privilege)
+- Host permissions: `*://*.linkedin.com/*`, `*://*.zhaopin.com/*`, `*://*.lagou.com/*`, `*://*.zhipin.com/*`, `*://*.liepin.com/*`
+- `externally_connectable.matches`: production domain + `http://localhost:3000/*`
+- No popup UI, no `activeTab`, no `storage` — background service worker only
+
+**Cookie serialization format (unchanged):**
+```json
+[{ "name": "li_at", "value": "...", "domain": ".linkedin.com", "path": "/", "secure": true, "httpOnly": true, "expirationDate": 1234567890 }]
+```
+
+**Installation detection:**
+- Platforms page checks extension availability on mount via `chrome.runtime.sendMessage`
+- If extension not installed → show install banner with Chrome Web Store link
+- After install → banner disappears on next page load
+
+**Reconnection flow:**
+- When session expires → user clicks "重新连接" → same Bridge flow triggers
+- Extension checks if user is still logged in → if yes, auto-captures fresh cookies
+- If not logged in → opens login page → same auto-capture flow
 
 **Security constraints:**
 - Extension must request minimum permissions (only cookies for specific domains)
 - One-time auth codes expire in 5 minutes
 - Backend validates origin and timestamp
 - Extension does not store cookies locally after transmission
+
+**Onboarding integration:**
+- Onboarding step 2 (after resume upload, before platform connection) detects browser type
+- Chromium-based browser detected → show "启用浏览器助手" button → Chrome Web Store inline install
+- Non-Chromium browser detected → show "下载海投连接助手" button → download native connector (see V1.1 below)
+- After install confirmed → proceed to platform connection step
+
+**V1.1: Native Local Connector (non-Chromium fallback)**
+
+For users on Safari, Firefox, or other non-Chromium browsers, a lightweight native utility replaces the browser extension.
+
+**Architecture:**
+
+```
+Web App (unchanged)                  Local Connector (5-10MB, background process)
+───────────────────                  ──────────────────────────────────────────────
+User clicks "连接 LinkedIn"
+  → fetch('http://localhost:19826/   ← Receives request
+     capture?platform=linkedin')     → Reads browser cookie DB file directly
+                                     → Filters for platform-specific auth cookies
+                                     → Returns cookie JSON
+  ← Receives cookies
+  → POST /platform-connect
+  ✅ Connected
+```
+
+**Cookie database locations by browser:**
+
+| Browser | OS | Cookie DB Path |
+|---------|-----|----------------|
+| Chrome | macOS | `~/Library/Application Support/Google/Chrome/Default/Cookies` |
+| Chrome | Windows | `%LOCALAPPDATA%\Google\Chrome\User Data\Default\Cookies` |
+| Edge | macOS | `~/Library/Application Support/Microsoft Edge/Default/Cookies` |
+| Edge | Windows | `%LOCALAPPDATA%\Microsoft\Edge\User Data\Default\Cookies` |
+| Firefox | macOS | `~/Library/Application Support/Firefox/Profiles/*/cookies.sqlite` |
+| Firefox | Windows | `%APPDATA%\Mozilla\Firefox\Profiles\*\cookies.sqlite` |
+| Safari | macOS | `~/Library/Cookies/Cookies.binarycookies` |
+| 360 Browser | Windows | Similar to Chrome path under 360 data directory |
+
+**Implementation notes:**
+- Built as a single binary (Rust/Tauri or Go) for minimal size (~5-10MB)
+- Runs as system tray / menubar background process
+- Listens on `localhost:19826` only (not exposed to network)
+- CORS restricted to production app domain + localhost
+- Auth: one-time token exchange during onboarding (prevents other local apps from reading cookies)
+- Cookie DB files are SQLite (Chrome/Edge/Firefox) or binary plist (Safari) — standard parsing
+- Chrome/Edge encrypt cookies with OS keychain; connector uses OS APIs to decrypt
+- Auto-updates via built-in update check on startup
+
+**Connector capabilities:**
+1. `GET /status` — health check, returns installed browsers list
+2. `POST /capture` — reads cookies for a platform from the best available browser
+3. `POST /detect-browsers` — returns which browsers are installed and which have platform sessions
+
+**Security model:**
+- Connector never stores cookies — reads on demand, returns to web app, discards
+- One-time token exchange prevents unauthorized local access
+- All communication over localhost only, never exposed externally
+- Connector auto-quits after 30 minutes of inactivity
+
+**User flow (non-Chromium):**
+1. Onboarding detects non-Chromium browser
+2. "下载海投连接助手" → downloads platform-appropriate installer (dmg/exe)
+3. User installs (standard OS install flow)
+4. Connector starts in background, confirms connection to web app
+5. From this point, "连接平台" works identically — click button → auto-capture → done
+
+**Scope:** V1.1 delivery (2-4 weeks post V1 launch). V1 ships with Chromium extension only. Onboarding shows appropriate path based on browser detection.
 
 ### Browser Profile Management
 

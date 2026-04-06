@@ -43,7 +43,7 @@ serve(async (req) => {
 
     supabase!
       .from('material')
-      .select('id, material_type, status, language, version, created_at')
+      .select('id, material_type, status, language, version, content_text, created_at')
       .eq('team_id', team.id)
       .eq('opportunity_id', opportunityId)
       .order('created_at', { ascending: false }),
@@ -76,6 +76,30 @@ serve(async (req) => {
   // Map material_ready → prioritized for frontend
   if (opp.stage === 'material_ready') opp.stage = 'prioritized';
 
+  // Get user's original resume PDF URL + profile baseline for comparison view
+  const { data: baseline } = await supabase!
+    .from('profile_baseline')
+    .select('full_name, contact_email, headline_summary')
+    .eq('team_id', team.id)
+    .order('version', { ascending: false })
+    .limit(1)
+    .single();
+
+  const { data: resumeAsset } = await supabase!
+    .from('resume_asset')
+    .select('storage_path, file_name')
+    .eq('user_id', user!.id)
+    .eq('is_primary', true)
+    .single();
+
+  let resume_signed_url: string | null = null;
+  if (resumeAsset?.storage_path) {
+    const { data: signedData } = await supabase!.storage
+      .from('resumes')
+      .createSignedUrl(resumeAsset.storage_path, 3600); // 1 hour
+    resume_signed_url = signedData?.signedUrl || null;
+  }
+
   return ok({
     opportunity: opp,
     timeline: timelineRes.data || [],
@@ -83,5 +107,7 @@ serve(async (req) => {
     submission_attempts: submissionsRes.data || [],
     handoffs: handoffsRes.data || [],
     conversation_threads: threadsRes.data || [],
+    profile: baseline ? { full_name: baseline.full_name, contact_email: baseline.contact_email } : null,
+    resume_signed_url,
   });
 });

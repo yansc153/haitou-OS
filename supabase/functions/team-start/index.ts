@@ -15,6 +15,8 @@ serve(async (req) => {
 
   if (req.method !== 'POST') return err(405, 'METHOD_NOT_ALLOWED', 'POST only');
 
+  try {
+
   const { user, error: authError } = await getAuthenticatedUser(req);
   if (authError) return authError;
 
@@ -30,6 +32,12 @@ serve(async (req) => {
 
   if (team.runtime_status === 'active') {
     return err(409, 'TEAM_ALREADY_ACTIVE', 'Team is already active');
+  }
+
+  // TeamStatus state machine gate: only 'ready' or 'paused' can start
+  const allowedStatuses = ['ready', 'paused', 'active'];
+  if (!allowedStatuses.includes(team.status)) {
+    return err(422, 'TEAM_NOT_READY', `团队状态「${team.status}」无法启动，需要先完成 onboarding`);
   }
 
   // Readiness gate checks
@@ -60,25 +68,24 @@ serve(async (req) => {
     .select('completion_band')
     .eq('team_id', team.id)
     .single();
-  if (!profile || profile.completion_band === 'missing' || profile.completion_band === 'partial') {
+  if (!profile || profile.completion_band === 'missing') {
     blockers.push('Submission profile not ready');
   }
 
   // 4. Effective runtime balance > 0
-  const { data: lastLedger } = await serviceClient
+  const { data: ledgerRows } = await serviceClient
     .from('runtime_ledger_entry')
     .select('balance_after_seconds')
     .eq('team_id', team.id)
     .order('created_at', { ascending: false })
-    .limit(1)
-    .single();
-  const balance = lastLedger?.balance_after_seconds ?? 0;
+    .limit(1);
+  const balance = ledgerRows?.[0]?.balance_after_seconds ?? 0;
   if (balance <= 0) {
     blockers.push('Runtime balance exhausted');
   }
 
   if (blockers.length > 0) {
-    return err(422, 'TEAM_NOT_READY', 'Team does not meet readiness requirements', { blockers });
+    return err(422, 'TEAM_NOT_READY', `启动条件未满足：${blockers.join('、')}`, { blockers });
   }
 
   const now = new Date().toISOString();
@@ -115,7 +122,7 @@ serve(async (req) => {
   await serviceClient.from('timeline_event').insert({
     team_id: team.id,
     event_type: 'team_started',
-    summary_text: 'Team execution started',
+    summary_text: '团队已启动运行',
     actor_type: 'user',
     visibility: 'feed',
   });
@@ -124,4 +131,8 @@ serve(async (req) => {
     team_id: team.id,
     runtime_status: 'active',
   });
+
+  } catch (e) {
+    return err(500, 'INTERNAL_ERROR', `Uncaught: ${(e as Error).message}`);
+  }
 });

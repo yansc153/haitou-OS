@@ -1,6 +1,21 @@
 node_modules/
 .next/
 .env.local
+.env.worker
 .DS_Store
 *.tsbuildinfo
+
+# Build artifacts
+dist/
+test-results/
+
+# Session artifacts
+.playwright-mcp/
+.harness/
+
+# Screenshots and temp files in root
+/*.png
+/*.pdf
+
+# Platform research
 Platform Research/boss-cli/

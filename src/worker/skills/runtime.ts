@@ -1,27 +1,25 @@
 /**
- * Skill Runtime — LLM caller, prompt assembly, output validation
+ * Skill Runtime — Qwen (通义千问) LLM caller
  *
- * This is the ~200 line core that replaces a "harness engine".
- * Each skill invocation: load prompt → assemble input → call Claude → parse JSON → validate.
+ * Uses DashScope OpenAI-compatible API.
+ * Tier mapping: tier3/4 → qwen-turbo, tier1/2 → qwen-plus, fallback → qwen-max
  *
  * Source: PROMPT_CONTRACT_SPEC.md
- * Source: BACKEND_API_AND_ARCHITECTURE_SPEC.md § Module 4: Skill Runtime
  */
 
-import Anthropic from '@anthropic-ai/sdk';
 import { PROMPT_CONTRACTS, type SkillContract } from './contracts.js';
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const DASHSCOPE_BASE = 'https://dashscope.aliyuncs.com/compatible-mode/v1';
 
-// Model tier mapping per BACKEND_API_AND_ARCHITECTURE_SPEC
 const MODEL_TIERS: Record<string, string> = {
-  tier1: 'claude-sonnet-4-20250514',
-  tier2: 'claude-sonnet-4-20250514',
-  tier3: 'claude-haiku-4-5-20251001',
-  tier4: 'claude-haiku-4-5-20251001',
+  tier1: 'qwen3.5-plus',
+  tier2: 'qwen3.5-plus',
+  tier3: 'qwen3.5-plus',
+  tier4: 'qwen3.5-plus',
 };
 
 const ESCALATION_ORDER = ['tier4', 'tier3', 'tier2', 'tier1'];
+const ESCALATION_MODEL = 'qwen3-max';
 
 export type SkillResult<T = Record<string, unknown>> = {
   success: true;
@@ -35,7 +33,7 @@ export type SkillResult<T = Record<string, unknown>> = {
 };
 
 /**
- * Execute a skill: load prompt contract → assemble input → call LLM → parse → validate.
+ * Execute a skill: load prompt contract → assemble input → call Qwen → parse → validate.
  */
 export async function executeSkill<T = Record<string, unknown>>(
   skillCode: string,
@@ -51,10 +49,9 @@ export async function executeSkill<T = Record<string, unknown>>(
 
   // Try with primary model
   let result = await callAndParse<T>(contract, model, inputJson);
-
   if (result.success) return result;
 
-  // Retry once with same model (format error recovery)
+  // Retry once with format hint
   if (result.error_type === 'parse_error') {
     console.log(`[skill] ${skillCode}: parse error, retrying with format hint...`);
     result = await callAndParse<T>(
@@ -75,6 +72,9 @@ export async function executeSkill<T = Record<string, unknown>>(
     if (result.success) return result;
   }
 
+  // Last resort: qwen-max
+  console.log(`[skill] ${skillCode}: final escalation to qwen-max`);
+  result = await callAndParse<T>(contract, ESCALATION_MODEL, inputJson);
   return result;
 }
 
@@ -83,20 +83,38 @@ async function callAndParse<T>(
   model: string,
   userContent: string
 ): Promise<SkillResult<T>> {
+  const apiKey = process.env.DASHSCOPE_API_KEY;
+  if (!apiKey) {
+    return { success: false, error: 'DASHSCOPE_API_KEY not configured', error_type: 'api_error' };
+  }
+
   try {
-    const response = await anthropic.messages.create({
-      model,
-      max_tokens: contract.maxOutputTokens,
-      system: contract.systemPrompt,
-      messages: [{ role: 'user', content: userContent }],
+    const response = await fetch(`${DASHSCOPE_BASE}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: contract.maxOutputTokens,
+        messages: [
+          { role: 'system', content: contract.systemPrompt },
+          { role: 'user', content: userContent },
+        ],
+      }),
     });
 
-    const text = response.content
-      .filter((block): block is Anthropic.TextBlock => block.type === 'text')
-      .map((block) => block.text)
-      .join('');
+    if (!response.ok) {
+      const errText = await response.text();
+      return { success: false, error: `Qwen API error ${response.status}: ${errText}`, error_type: 'api_error' };
+    }
 
-    // Extract JSON from response (handle possible markdown wrapping)
+    const json = await response.json();
+    const text = json.choices?.[0]?.message?.content || '';
+    const usage = json.usage || {};
+
+    // Extract JSON from response
     const jsonStr = extractJson(text);
     if (!jsonStr) {
       return {
@@ -117,13 +135,26 @@ async function callAndParse<T>(
       };
     }
 
+    // Validate required fields from contract
+    if (contract.requiredFields.length > 0) {
+      const obj = parsed as Record<string, unknown>;
+      const missing = contract.requiredFields.filter(f => !(f in obj) || obj[f] === undefined);
+      if (missing.length > 0) {
+        return {
+          success: false,
+          error: `Missing required fields: ${missing.join(', ')}`,
+          error_type: 'validation_error',
+        };
+      }
+    }
+
     return {
       success: true,
       output: parsed,
       model_used: model,
       tokens_used: {
-        input: response.usage.input_tokens,
-        output: response.usage.output_tokens,
+        input: usage.prompt_tokens ?? 0,
+        output: usage.completion_tokens ?? 0,
       },
     };
   } catch (err) {
@@ -133,24 +164,17 @@ async function callAndParse<T>(
 }
 
 function extractJson(text: string): string | null {
-  // Try raw text first
-  const trimmed = text.trim();
-  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-    return trimmed;
-  }
+  // Strip Qwen3 <think>...</think> reasoning blocks
+  let trimmed = text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
 
-  // Try extracting from markdown code block
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) return trimmed;
+
   const codeBlockMatch = trimmed.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-  if (codeBlockMatch?.[1]) {
-    return codeBlockMatch[1].trim();
-  }
+  if (codeBlockMatch?.[1]) return codeBlockMatch[1].trim();
 
-  // Try finding first { to last }
   const firstBrace = trimmed.indexOf('{');
   const lastBrace = trimmed.lastIndexOf('}');
-  if (firstBrace !== -1 && lastBrace > firstBrace) {
-    return trimmed.slice(firstBrace, lastBrace + 1);
-  }
+  if (firstBrace !== -1 && lastBrace > firstBrace) return trimmed.slice(firstBrace, lastBrace + 1);
 
   return null;
 }

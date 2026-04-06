@@ -82,22 +82,31 @@ serve(async (req) => {
     .eq('id', team.id);
 
   // Seed initial runtime balance based on plan tier
-  // Free: 2 hours (7200s), Pro: 8 hours (28800s), Plus: 24 hours (86400s)
+  // Free: 6 hours (21600s), Pro: 8 hours (28800s), Plus: 24 hours (86400s)
   const PLAN_ALLOCATIONS: Record<string, number> = {
-    free: 7200,
+    free: 21600,
     pro: 28800,
     plus: 86400,
   };
-  const allocationSeconds = PLAN_ALLOCATIONS[team.plan_tier] || 7200;
+  const allocationSeconds = PLAN_ALLOCATIONS[team.plan_tier] || 21600;
 
-  await serviceClient.from('runtime_ledger_entry').insert({
-    team_id: team.id,
-    entry_type: 'allocation',
-    runtime_delta_seconds: allocationSeconds,
-    balance_after_seconds: allocationSeconds,
-    trigger_source: 'billing',
-    reason: `Initial ${team.plan_tier} plan allocation`,
-  });
+  // Idempotency: only allocate if no allocation exists yet
+  const { count: existingAllocation } = await serviceClient
+    .from('runtime_ledger_entry')
+    .select('id', { count: 'exact', head: true })
+    .eq('team_id', team.id)
+    .eq('entry_type', 'allocation');
+
+  if (!existingAllocation || existingAllocation === 0) {
+    await serviceClient.from('runtime_ledger_entry').insert({
+      team_id: team.id,
+      entry_type: 'allocation',
+      runtime_delta_seconds: allocationSeconds,
+      balance_after_seconds: allocationSeconds,
+      trigger_source: 'billing',
+      reason: `Initial ${team.plan_tier} plan allocation`,
+    });
+  }
 
   return ok({
     team_id: team.id,

@@ -37,7 +37,13 @@ serve(async (req) => {
   if (stage) query = query.eq('stage', stage);
   if (platformId) query = query.eq('source_platform_id', platformId);
   if (priority) query = query.eq('priority_level', priority);
-  if (search) query = query.or(`company_name.ilike.%${search}%,job_title.ilike.%${search}%`);
+  if (search) {
+    // Sanitize search input: strip PostgREST filter syntax characters
+    const sanitized = search.replace(/[.,()"'\\%;:]/g, '').trim();
+    if (sanitized) {
+      query = query.or(`company_name.ilike.%${sanitized}%,job_title.ilike.%${sanitized}%`);
+    }
+  }
 
   // Sort
   if (sort === 'created_at') {
@@ -46,12 +52,13 @@ serve(async (req) => {
     query = query.order('latest_event_at', { ascending: false, nullsFirst: false });
   }
 
-  // Cursor-based pagination
+  // Cursor-based pagination (must use same field as sort)
+  const cursorField = sort === 'created_at' ? 'created_at' : 'latest_event_at';
   if (cursor) {
-    query = query.lt('latest_event_at', cursor);
+    query = query.lt(cursorField, cursor);
   }
 
-  query = query.limit(limit + 1); // +1 to detect next page
+  query = query.limit(limit + 1);
 
   const { data: rows, error: queryError } = await query;
   if (queryError) return err(500, 'INTERNAL_ERROR', queryError.message);
@@ -61,7 +68,7 @@ serve(async (req) => {
   if (hasMore) opportunities.pop();
 
   const nextCursor = hasMore && opportunities.length > 0
-    ? (opportunities[opportunities.length - 1] as Record<string, unknown>).latest_event_at
+    ? (opportunities[opportunities.length - 1] as Record<string, unknown>)[cursorField]
     : null;
 
   // Map material_ready → prioritized for frontend

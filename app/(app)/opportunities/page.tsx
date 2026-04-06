@@ -1,260 +1,679 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { pdf } from '@react-pdf/renderer';
+import { createClient } from '@/lib/supabase/client';
+import { getValidSession } from '@/lib/hooks/use-api';
 import { AnimatedContent } from '@/components/ui/animated-content';
 import { SpotlightCard } from '@/components/ui/spotlight-card';
-import { AgentBadge, type AgentInfo } from '@/components/agents/agent-badge';
+import { ResumePdf } from '@/components/pdf/resume-pdf';
+
+function stripHtml(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/?(p|div|h[1-6]|li)>/gi, '\n')
+    .replace(/<\/?ul>/gi, '\n')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/* ─── Constants ─── */
 
 const STAGES = [
-  { value: 'discovered', label: '已发现' },
-  { value: 'screened', label: '筛选中' },
-  { value: 'prioritized', label: '已排序' },
-  { value: 'submitted', label: '已投递' },
-  { value: 'contact_started', label: '已联系' },
+  { value: 'discovered', label: '发现', icon: '🔍' },
+  { value: 'screened', label: '筛选', icon: '🎯' },
+  { value: 'prioritized', label: '排序', icon: '📊' },
+  { value: 'submitted', label: '投递', icon: '🚀' },
+  { value: 'contact_started', label: '联系', icon: '💬' },
 ];
 
-const STAGE_COLORS: Record<string, string> = {
-  discovered: 'bg-muted-foreground/20 text-muted-foreground',
-  screened: 'bg-status-info/15 text-status-info',
-  prioritized: 'bg-amber-100 text-amber-700',
-  submitted: 'bg-secondary/20 text-secondary',
-  contact_started: 'bg-accent/15 text-accent',
+const FIT_ZH: Record<string, { label: string; cls: string }> = {
+  strong:    { label: '强匹配', cls: 'bg-[hsl(var(--status-active))]/10 text-[hsl(var(--status-active))]' },
+  moderate:  { label: '中等', cls: 'bg-[hsl(var(--status-warning))]/10 text-[hsl(var(--status-warning))]' },
+  weak:      { label: '弱', cls: 'bg-muted-foreground/10 text-muted-foreground' },
 };
 
-type Opp = { id: string; title: string; company: string; location: string; stage: string; agent: string; match?: string };
+const STAGE_INDEX: Record<string, number> = {
+  discovered: 0, screened: 1, prioritized: 2, submitted: 3, contact_started: 4,
+};
 
-const MOCK_OPPS: Opp[] = [
-  { id: '1', title: '产品架构师', company: 'Tinder Dynamics', location: '远程', stage: 'discovered', agent: '岗位研究员' },
-  { id: '2', title: '前端工程师', company: 'Luminary.li', location: '上海', stage: 'discovered', agent: '岗位研究员' },
-  { id: '3', title: '创意总监', company: 'Aeden Design', location: '远程', stage: 'screened', agent: '匹配审核员' },
-  { id: '4', title: 'AI 产品负责人', company: 'Nexus Core', location: '旧金山', stage: 'prioritized', agent: '匹配审核员', match: '96%' },
-  { id: '5', title: '技术副总裁', company: 'Quant Systems', location: '新加坡', stage: 'submitted', agent: '投递专员' },
-  { id: '6', title: '高级后端工程师', company: 'Stripe', location: '远程', stage: 'submitted', agent: '投递专员' },
-  { id: '7', title: '设计总监', company: 'LVMH Digital', location: '远程', stage: 'contact_started', agent: '招聘关系经理' },
-  { id: '8', title: '产品经理', company: '字节跳动', location: '北京', stage: 'submitted', agent: '投递专员' },
-  { id: '9', title: '数据科学家', company: '蚂蚁集团', location: '杭州', stage: 'screened', agent: '匹配审核员' },
-  { id: '10', title: '全栈工程师', company: 'DJI', location: '深圳', stage: 'discovered', agent: '岗位研究员' },
-];
+/* ─── Types ─── */
 
-const MOCK_AGENTS_BOTTOM: AgentInfo[] = [
-  { id: '1', role_code: 'opportunity_research', title_zh: '岗位研究员', persona_name: 'Scout', status: 'working' },
-  { id: '2', role_code: 'materials_advisor', title_zh: '简历顾问', persona_name: 'Advisor', status: 'working' },
-  { id: '3', role_code: 'application_executor', title_zh: '投递专员', persona_name: 'Executor', status: 'working' },
-  { id: '4', role_code: 'matching_review', title_zh: '匹配审核员', persona_name: 'Reviewer', status: 'ready' },
-  { id: '5', role_code: 'relationship_manager', title_zh: '招聘关系经理', persona_name: 'Liaison', status: 'ready' },
-  { id: '6', role_code: 'orchestrator', title_zh: '调度官', persona_name: 'Commander', status: 'working' },
-  { id: '7', role_code: 'profile_intelligence', title_zh: '履历分析师', persona_name: 'Analyst', status: 'ready' },
-];
+type Opp = {
+  id: string;
+  job_title: string;
+  company_name: string;
+  location_label: string;
+  stage: string;
+  priority_level: string;
+  latest_event_summary?: string;
+  recommendation?: string;
+  recommendation_reason_tags?: string[];
+  fit_posture?: string;
+  job_description_text?: string;
+  created_at: string;
+};
+
+type TailoredSection = {
+  section_name: string;
+  tailored_text: string;
+  changes_made?: string[];
+};
+
+type ResumeOutput = {
+  tailored_sections?: TailoredSection[];
+  emphasis_strategy?: string;
+};
+
+type CoverLetterOutput = {
+  full_text?: string;
+  opening?: string;
+  value_proposition?: string;
+  closing?: string;
+  subject_line?: string;
+};
+
+type OppDetail = {
+  opportunity: Opp & Record<string, unknown>;
+  timeline: Array<{ id: string; event_type: string; summary_text: string; occurred_at: string; actor_type: string }>;
+  materials: Array<{ id: string; material_type: string; status: string; language: string; content_text?: string | null; created_at: string }>;
+  submission_attempts: Array<{ id: string; execution_outcome: string; started_at: string; completed_at?: string; failure_reason_code?: string }>;
+  profile?: { full_name: string; contact_email: string } | null;
+  resume_signed_url?: string | null;
+};
+
+/* ─── No demo data — all content comes from real API ─── */
+
+/* ─── Helpers ─── */
+
+function tryParseJson(text: string): unknown {
+  try { return JSON.parse(text); } catch { return null; }
+}
+
+function timeAgo(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return '刚刚';
+  if (mins < 60) return `${mins}分钟前`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}小时前`;
+  return `${Math.floor(hrs / 24)}天前`;
+}
+
+const AGENT_LABELS: Record<string, string> = {
+  task_opportunity_discovery_completed: '岗位研究员',
+  opportunity_screened: '匹配审核员',
+  materials_generated: '简历顾问',
+  submission_success: '投递专员',
+  submission_failed: '投递专员',
+  handoff_created: '调度官',
+};
+
+/* ─── Main Page ─── */
 
 export default function OpportunitiesPage() {
-  const [view, setView] = useState<'pipeline' | 'list'>('pipeline');
-  const [selected, setSelected] = useState<Opp | null>(null);
+  const supabase = useMemo(() => createClient(), []);
+  const [opps, setOpps] = useState<Opp[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<OppDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [expandedSections, setExpandedSections] = useState<Set<number>>(new Set());
+  const [copied, setCopied] = useState(false);
+  const [rightDocMode, setRightDocMode] = useState<'diff' | 'clean'>('diff');
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const pdfRef = useRef<HTMLDivElement>(null);
+
+  const fetchOpps = useCallback(async () => {
+    try {
+      const session = await getValidSession(supabase);
+      if (!session) return;
+      const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/opportunities-list?limit=100`, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      const json = await res.json();
+      if (json.data?.opportunities) {
+        setOpps(json.data.opportunities);
+        // Auto-select first submitted/prioritized opportunity
+        const first = json.data.opportunities.find((o: Opp) => ['submitted', 'contact_started', 'prioritized'].includes(o.stage))
+          || json.data.opportunities[0];
+        if (first) selectOpp(first.id);
+      }
+    } catch (e) { console.error('[opportunities]', e); }
+    setLoading(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supabase]);
+
+  useEffect(() => { fetchOpps(); }, [fetchOpps]);
+
+  const selectOpp = useCallback(async (id: string) => {
+    if (id === selectedId && detail) return;
+    setSelectedId(id);
+    setDetailLoading(true);
+    setExpandedSections(new Set());
+    try {
+      const session = await getValidSession(supabase);
+      if (!session) return;
+      const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/opportunity-detail?id=${id}`, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      const json = await res.json();
+      if (json.data) {
+        setDetail(json.data as OppDetail);
+      }
+    } catch { /* ignore */ }
+    setDetailLoading(false);
+  }, [supabase, selectedId, detail]);
+
+  // Parsed material data
+  const resumeMaterial = detail?.materials.find(m => m.material_type.includes('resume'));
+  const coverMaterial = detail?.materials.find(m => m.material_type === 'cover_letter');
+  const resumeParsed = resumeMaterial?.content_text ? tryParseJson(resumeMaterial.content_text) as ResumeOutput | null : null;
+  const coverParsed = coverMaterial?.content_text ? tryParseJson(coverMaterial.content_text) as CoverLetterOutput | null : null;
+  const sections = resumeParsed?.tailored_sections || [];
+  const modifiedCount = sections.filter(s => s.changes_made && s.changes_made.length > 0).length;
+
+  // Stage counts — cumulative (how many passed through each stage)
+  const stageCounts = STAGES.map((s, idx) => ({
+    ...s,
+    count: opps.filter(o => (STAGE_INDEX[o.stage] ?? -1) >= idx).length,
+  }));
+
+  const selectedOpp = opps.find(o => o.id === selectedId);
+  const selectedStageIdx = STAGE_INDEX[selectedOpp?.stage || ''] ?? -1;
+
+  const toggleSection = (i: number) => {
+    setExpandedSections(prev => {
+      const next = new Set(prev);
+      next.has(i) ? next.delete(i) : next.add(i);
+      return next;
+    });
+  };
+
+  const [exporting, setExporting] = useState(false);
+  const handleExportPdf = async () => {
+    if (!resumeParsed?.tailored_sections || !detail) return;
+    setExporting(true);
+    try {
+      const blob = await pdf(
+        ResumePdf({
+          fullName: detail.profile?.full_name || 'Resume',
+          contactEmail: detail.profile?.contact_email,
+          sections: resumeParsed.tailored_sections,
+          companyName: detail.opportunity.company_name,
+          jobTitle: detail.opportunity.job_title,
+        })
+      ).toBlob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${detail.opportunity.company_name}_${detail.opportunity.job_title}_简历.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error('[pdf] Export failed:', e);
+    }
+    setExporting(false);
+  };
+
+  const handleCopy = async () => {
+    if (!resumeParsed) return;
+    const text = (resumeParsed.tailored_sections || []).map(s => `## ${s.section_name}\n${s.tailored_text}`).join('\n\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch { /* */ }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="text-sm text-muted-foreground animate-pulse">加载中...</div>
+      </div>
+    );
+  }
 
   return (
     <div>
-      {/* Header */}
-      <div className="flex items-start justify-between mb-8">
-        <div>
-          <h1 className="text-4xl font-display font-extrabold tracking-tight">机会工作台</h1>
-          <p className="text-sm text-muted-foreground mt-1">管理 7 位 AI 专员正在推进的所有机会</p>
-        </div>
-        <div className="flex items-center gap-2">
-          {['pipeline', 'list'].map(v => (
-            <button
-              key={v}
-              onClick={() => setView(v as 'pipeline' | 'list')}
-              className={`px-4 py-2 text-sm rounded-xl transition-colors ${view === v ? 'bg-foreground text-background font-semibold' : 'text-muted-foreground hover:bg-surface-low'}`}
-            >
-              {v === 'pipeline' ? 'Pipeline' : '列表'}
-            </button>
-          ))}
-        </div>
+      {/* ━━━ Header ━━━ */}
+      <div className="mb-6">
+        <h1 className="text-3xl font-display font-extrabold tracking-tight">机会工作台</h1>
+        <p className="text-sm text-muted-foreground mt-1">
+          {opps.length > 0 ? `${opps.length} 个机会 · AI 团队持续运营中` : '暂无机会 — 启动团队后专员会自动发现'}
+        </p>
       </div>
 
-      {/* Pipeline View */}
-      {view === 'pipeline' && (
-        <div className="flex gap-4 overflow-x-auto pb-6" style={{ minHeight: '500px' }}>
-          {STAGES.map(stage => {
-            const items = MOCK_OPPS.filter(o => o.stage === stage.value);
-            return (
-              <div key={stage.value} className="flex-shrink-0 w-[260px] bg-surface-low/50 rounded-2xl p-3">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-sm font-bold">{stage.label}</h3>
-                  <span className="text-xs text-muted-foreground px-2 py-0.5 rounded-full bg-surface-low">{items.length}</span>
-                </div>
-                <div className="space-y-3">
-                  {items.map((opp, i) => (
-                    <AnimatedContent key={opp.id} delay={i * 0.04}>
-                      <SpotlightCard
-                        className="bg-white rounded-2xl p-5 cursor-pointer hover:shadow-lifted hover:-translate-y-0.5 transition-all duration-200 ghost-border"
-                        onClick={() => setSelected(opp)}
-                      >
-                        {/* Match color bar at top */}
-                        {opp.match && <div className="h-1 bg-status-active/30 rounded-full mb-3 w-2/3" />}
-                        <h4 className="text-sm font-bold mb-1">{opp.title}</h4>
-                        <p className="text-xs text-muted-foreground">{opp.company}</p>
-                        <p className="text-xs text-muted-foreground/50 mt-0.5">{opp.location}</p>
-                        <div className="flex items-center justify-between mt-3 pt-3 border-t border-border/10">
-                          <span className="text-[10px] text-secondary font-semibold">{opp.agent}</span>
-                          {opp.match && (
-                            <span className="px-2 py-0.5 rounded-full bg-status-active/10 text-status-active text-[9px] font-bold">
-                              {opp.match}
-                            </span>
-                          )}
-                        </div>
-                      </SpotlightCard>
-                    </AnimatedContent>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
+      {opps.length === 0 && (
+        <div className="surface-card p-12 text-center">
+          <p className="text-lg font-display font-bold mb-2">还没有机会</p>
+          <p className="text-sm text-muted-foreground">启动团队后，岗位研究员会自动扫描平台并发现匹配机会</p>
         </div>
       )}
 
-      {/* List View */}
-      {view === 'list' && (
-        <div className="space-y-2">
-          {MOCK_OPPS.map((opp, i) => (
-            <AnimatedContent key={opp.id} delay={i * 0.03}>
-              <div
-                className="surface-card p-5 flex items-center justify-between cursor-pointer hover:shadow-lifted transition-shadow"
-                onClick={() => setSelected(opp)}
-              >
-                <div>
-                  <h4 className="text-sm font-bold">{opp.title}</h4>
-                  <p className="text-xs text-muted-foreground">{opp.company} · {opp.location}</p>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${STAGE_COLORS[opp.stage]}`}>
-                    {STAGES.find(s => s.value === opp.stage)?.label}
-                  </span>
-                  {opp.match && <span className="text-xs text-status-active font-bold">{opp.match}</span>}
-                </div>
-              </div>
-            </AnimatedContent>
-          ))}
-        </div>
-      )}
-
-      {/* Agent Force (bottom) — matches Stitch design */}
-      <div className="mt-12 pt-8 border-t border-border/20">
-        <h2 className="text-lg font-display font-bold mb-4">团队阵容</h2>
-        <div className="flex items-start gap-6 overflow-x-auto pb-2">
-          {MOCK_AGENTS_BOTTOM.map(a => (
-            <AgentBadge key={a.id} agent={a} size="compact" />
-          ))}
-        </div>
-      </div>
-
-      {/* Rich Detail Panel */}
-      {selected && (
-        <div className="fixed inset-y-0 right-0 w-[560px] bg-background shadow-2xl z-50 overflow-y-auto border-l border-border/20">
-          <div className="p-8">
-            {/* Header */}
-            <div className="flex items-center justify-between mb-6">
-              <button onClick={() => setSelected(null)} className="text-muted-foreground hover:text-foreground text-sm flex items-center gap-1">← 返回列表</button>
-              <span className={`px-3 py-1 rounded-full text-[10px] font-bold ${STAGE_COLORS[selected.stage]}`}>
-                {STAGES.find(s => s.value === selected.stage)?.label}
-              </span>
+      {opps.length > 0 && (
+        <>
+          {/* ━━━ Section 1: Horizontal scrollable job cards ━━━ */}
+          <div className="mb-5">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-xs font-label uppercase tracking-widest text-muted-foreground">岗位总览</span>
+              <span className="text-xs text-muted-foreground">{opps.length} 个机会</span>
             </div>
-
-            <h2 className="text-3xl font-display font-extrabold mb-1">{selected.title}</h2>
-            <p className="text-lg text-muted-foreground mb-1">{selected.company}</p>
-            <p className="text-sm text-muted-foreground/60 mb-6">{selected.location}</p>
-
-            {/* Match + Agent badges */}
-            <div className="flex items-center gap-3 mb-8">
-              {selected.match && (
-                <span className="px-3 py-1.5 rounded-full bg-status-active/10 text-status-active text-sm font-bold">{selected.match} 匹配</span>
-              )}
-              <span className="px-3 py-1.5 rounded-full bg-surface-low text-sm">{selected.agent}</span>
-            </div>
-
-            {/* Tabs-like sections */}
-            <div className="space-y-8">
-              {/* Timeline */}
-              <div>
-                <h3 className="text-base font-bold mb-4 flex items-center gap-2">
-                  <span className="w-6 h-6 rounded bg-foreground/10 flex items-center justify-center text-xs">📋</span>
-                  操作时间线
-                </h3>
-                <div className="surface-low rounded-2xl p-5 space-y-4">
-                  {[
-                    { time: '14:30', agent: '岗位研究员', event: '在 Greenhouse 发现此机会', status: 'done' },
-                    { time: '14:32', agent: '匹配审核员', event: '五维评估：强匹配（技能 95%，资历 90%，地点 100%）', status: 'done' },
-                    { time: '14:35', agent: '简历顾问', event: '开始为此岗位定制简历和求职信', status: 'done' },
-                    { time: '14:42', agent: '简历顾问', event: '简历定制完成，关键词：分布式系统、高可用架构', status: 'done' },
-                    { time: '14:45', agent: '投递专员', event: '通过 Greenhouse 表单提交投递', status: selected.stage === 'submitted' || selected.stage === 'contact_started' ? 'done' : 'pending' },
-                  ].map((e, i) => (
-                    <div key={i} className="flex items-start gap-4">
-                      <div className="flex flex-col items-center">
-                        <div className={`w-3 h-3 rounded-full ${e.status === 'done' ? 'bg-status-active' : 'bg-muted-foreground/20'}`} />
-                        {i < 4 && <div className="w-px h-6 bg-border/30 mt-1" />}
+            <div ref={scrollRef} className="flex gap-3 overflow-x-auto pb-3 -mx-2 px-2 scrollbar-thin">
+              {opps.map((opp, i) => {
+                const isSelected = opp.id === selectedId;
+                const fit = FIT_ZH[opp.fit_posture || ''];
+                const hasMaterials = opp.stage === 'submitted' || opp.stage === 'contact_started' || opp.stage === 'prioritized';
+                return (
+                  <AnimatedContent key={opp.id} delay={i * 0.03}>
+                    <div
+                      onClick={() => selectOpp(opp.id)}
+                      className={`flex-shrink-0 w-[220px] rounded-2xl p-4 cursor-pointer transition-all duration-200 ${
+                        isSelected
+                          ? 'shadow-lifted -translate-y-1 ring-2'
+                          : 'hover:shadow-card hover:-translate-y-0.5'
+                      }`}
+                      style={{
+                        background: 'hsl(var(--card))',
+                        boxShadow: isSelected ? '0 0 0 2px hsl(var(--foreground)), var(--shadow-lifted)' : 'var(--shadow-card)',
+                      }}
+                    >
+                      {/* Priority bar */}
+                      {opp.priority_level === 'critical' && (
+                        <div className="h-1 rounded-full mb-3 w-2/3" style={{ background: 'hsl(var(--status-active) / 0.3)' }} />
+                      )}
+                      <h4 className="text-sm font-bold truncate mb-0.5">{opp.company_name}</h4>
+                      <p className="text-xs text-muted-foreground truncate mb-2">{opp.job_title}</p>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {fit && <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold ${fit.cls}`}>{fit.label}</span>}
+                        {hasMaterials && (
+                          <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold" style={{ background: 'hsl(var(--secondary) / 0.1)', color: 'hsl(var(--secondary))' }}>
+                            已精修
+                          </span>
+                        )}
                       </div>
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-0.5">
-                          <span className="text-xs font-mono text-muted-foreground/50">{e.time}</span>
-                          <span className="text-xs text-secondary font-semibold">{e.agent}</span>
-                        </div>
-                        <p className="text-sm text-muted-foreground">{e.event}</p>
+                      <div className="flex items-center justify-between mt-2 pt-2" style={{ borderTop: '1px solid hsl(var(--border) / 0.1)' }}>
+                        <span className="text-[10px] text-muted-foreground">{timeAgo(opp.created_at)}</span>
+                        <span className="text-[10px] text-muted-foreground/50">
+                          {STAGES.find(s => s.value === opp.stage)?.label || opp.stage}
+                        </span>
                       </div>
                     </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Generated Materials */}
-              <div>
-                <h3 className="text-base font-bold mb-4 flex items-center gap-2">
-                  <span className="w-6 h-6 rounded bg-foreground/10 flex items-center justify-center text-xs">📄</span>
-                  生成材料
-                </h3>
-                <div className="space-y-3">
-                  <div className="surface-card p-4 rounded-xl flex items-center justify-between ghost-border">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-secondary/10 flex items-center justify-center text-sm">📝</div>
-                      <div>
-                        <p className="text-sm font-semibold">定制简历 — {selected.company}</p>
-                        <p className="text-xs text-muted-foreground">已优化关键词 · 英文版</p>
-                      </div>
-                    </div>
-                    <button className="text-xs text-secondary font-semibold hover:underline">预览</button>
-                  </div>
-                  <div className="surface-card p-4 rounded-xl flex items-center justify-between ghost-border">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-accent/10 flex items-center justify-center text-sm">✉️</div>
-                      <div>
-                        <p className="text-sm font-semibold">求职信 — {selected.company}</p>
-                        <p className="text-xs text-muted-foreground">已生成 · 300 词</p>
-                      </div>
-                    </div>
-                    <button className="text-xs text-secondary font-semibold hover:underline">预览</button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Submission Record */}
-              <div>
-                <h3 className="text-base font-bold mb-4 flex items-center gap-2">
-                  <span className="w-6 h-6 rounded bg-foreground/10 flex items-center justify-center text-xs">🚀</span>
-                  投递记录
-                </h3>
-                {(selected.stage === 'submitted' || selected.stage === 'contact_started') ? (
-                  <div className="surface-low rounded-2xl p-5">
-                    <div className="flex items-center justify-between mb-3">
-                      <span className="text-sm font-semibold">Greenhouse 表单投递</span>
-                      <span className="px-2 py-0.5 rounded-full bg-status-active/10 text-status-active text-[10px] font-bold">成功</span>
-                    </div>
-                    <p className="text-xs text-muted-foreground">投递时间：今天 14:45 · 确认信号：页面显示 "Application received"</p>
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground/50 p-4">尚未投递 — 当前阶段：{STAGES.find(s => s.value === selected.stage)?.label}</p>
-                )}
-              </div>
+                  </AnimatedContent>
+                );
+              })}
             </div>
           </div>
-        </div>
+
+          {/* ━━━ Section 2: Pipeline stage bar ━━━ */}
+          <div className="surface-card p-4 mb-6 rounded-2xl">
+            <div className="flex items-center justify-between">
+              {stageCounts.map((stage, i) => {
+                const isActive = i <= selectedStageIdx;
+                const isCurrent = i === selectedStageIdx;
+                return (
+                  <div key={stage.value} className="flex items-center flex-1">
+                    <div className="flex flex-col items-center flex-1">
+                      <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm mb-1.5 transition-all ${
+                        isCurrent
+                          ? 'shadow-md scale-110'
+                          : ''
+                      }`} style={{
+                        background: isActive ? 'hsl(var(--secondary) / 0.15)' : 'hsl(var(--surface-low))',
+                        color: isActive ? 'hsl(var(--secondary))' : 'hsl(var(--muted-foreground) / 0.4)',
+                      }}>
+                        {stage.icon}
+                      </div>
+                      <span className={`text-[11px] font-semibold ${isActive ? '' : 'text-muted-foreground/40'}`}>{stage.label}</span>
+                      <span className="text-[10px] text-muted-foreground">{stage.count}</span>
+                    </div>
+                    {/* Connector line */}
+                    {i < stageCounts.length - 1 && (
+                      <div className="h-px flex-1 -mt-5 mx-1" style={{
+                        background: i < selectedStageIdx
+                          ? 'hsl(var(--secondary) / 0.3)'
+                          : 'hsl(var(--border) / 0.2)',
+                      }} />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* ━━━ Section 3: Selected opportunity detail + resume comparison ━━━ */}
+          {selectedId && (
+            <div>
+              {detailLoading ? (
+                <div className="surface-card p-12 text-center">
+                  <div className="text-sm text-muted-foreground animate-pulse">加载详情...</div>
+                </div>
+              ) : detail ? (
+                <>
+                  {/* Context bar */}
+                  <div className="flex items-start justify-between mb-5">
+                    <div>
+                      <h2 className="text-2xl font-display font-extrabold tracking-tight">
+                        {detail.opportunity.company_name} — {detail.opportunity.job_title}
+                      </h2>
+                      <p className="text-sm text-muted-foreground mt-0.5">
+                        {detail.opportunity.location_label || ''}
+                        {detail.opportunity.created_at ? ` · 发现于 ${timeAgo(detail.opportunity.created_at)}` : ''}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {resumeParsed && (
+                        <button
+                          onClick={handleCopy}
+                          className="px-4 py-2 rounded-lg text-xs font-semibold bg-surface-low hover:bg-border/40 transition-colors"
+                        >
+                          {copied ? '已复制' : '复制全文'}
+                        </button>
+                      )}
+                      <button onClick={handleExportPdf} disabled={exporting || !resumeParsed} className="px-4 py-2 rounded-lg text-xs font-semibold bg-foreground text-background hover:opacity-90 transition-opacity disabled:opacity-50">
+                        {exporting ? '生成中...' : '导出 PDF'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* AI Assessment Summary */}
+                  {(detail.opportunity.fit_posture || detail.opportunity.recommendation) && (
+                    <div className="mb-5 surface-card rounded-xl p-5">
+                      <div className="flex items-center gap-4 flex-wrap">
+                        {detail.opportunity.fit_posture && (
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-muted-foreground">匹配度:</span>
+                            <span className={`px-2 py-0.5 rounded text-xs font-bold ${(FIT_ZH[detail.opportunity.fit_posture] || FIT_ZH.weak).cls}`}>
+                              {(FIT_ZH[detail.opportunity.fit_posture] || { label: detail.opportunity.fit_posture }).label}
+                            </span>
+                          </div>
+                        )}
+                        {detail.opportunity.recommendation && (
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-muted-foreground">AI 建议:</span>
+                            <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+                              detail.opportunity.recommendation === 'advance' ? 'bg-status-active/10 text-status-active' :
+                              detail.opportunity.recommendation === 'watch' ? 'bg-status-warning/10 text-status-warning' :
+                              'bg-muted-foreground/10 text-muted-foreground'
+                            }`}>
+                              {detail.opportunity.recommendation === 'advance' ? '推荐投递' :
+                               detail.opportunity.recommendation === 'watch' ? '持续观望' : '不匹配'}
+                            </span>
+                          </div>
+                        )}
+                        {detail.opportunity.recommendation_reason_tags && detail.opportunity.recommendation_reason_tags.length > 0 && (
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {detail.opportunity.recommendation_reason_tags.map((tag: string) => (
+                              <span key={tag} className="px-2 py-0.5 rounded bg-surface-low text-[10px] text-muted-foreground">{tag}</span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* JD Content */}
+                  {detail.opportunity.job_description_text && (
+                    <div className="mb-6">
+                      <details className="group">
+                        <summary className="cursor-pointer text-xs font-label uppercase tracking-widest text-muted-foreground hover:text-foreground transition-colors flex items-center gap-2">
+                          <span>职位描述 (JD)</span>
+                          <span className="text-[10px] group-open:rotate-90 transition-transform">▶</span>
+                        </summary>
+                        <div className="mt-3 surface-card rounded-xl p-5 max-h-[400px] overflow-y-auto">
+                          <p className="text-sm text-muted-foreground leading-relaxed whitespace-pre-wrap">{stripHtml(detail.opportunity.job_description_text)}</p>
+                        </div>
+                      </details>
+                    </div>
+                  )}
+
+                  {/* AI strategy + stats row */}
+                  {resumeParsed?.emphasis_strategy && (
+                    <AnimatedContent>
+                      <div className="grid lg:grid-cols-[1fr_auto] gap-4 mb-6">
+                        <div className="rounded-xl p-4" style={{ borderLeft: '3px solid hsl(var(--secondary))', background: `hsl(var(--secondary) / var(--diff-strategy-bg, 0.05))` }}>
+                          <p className="text-[10px] font-label uppercase tracking-widest text-muted-foreground mb-1">AI 改写策略</p>
+                          <p className="text-sm leading-relaxed" style={{ color: 'hsl(var(--secondary))' }}>{resumeParsed.emphasis_strategy}</p>
+                        </div>
+                        <div className="flex items-center gap-6 px-4">
+                          <div className="text-center">
+                            <p className="text-2xl font-display font-extrabold" style={{ color: 'hsl(var(--secondary))' }}>{modifiedCount}</p>
+                            <p className="text-[10px] text-muted-foreground">章节修改</p>
+                          </div>
+                          <div className="text-center">
+                            <p className="text-2xl font-display font-extrabold">{sections.length - modifiedCount}</p>
+                            <p className="text-[10px] text-muted-foreground">保持原样</p>
+                          </div>
+                          <div className="text-center">
+                            <p className="text-2xl font-display font-extrabold" style={{ color: 'hsl(var(--secondary))' }}>
+                              {Math.min(Math.round((modifiedCount / Math.max(sections.length, 1)) * 100 + 20), 98)}%
+                            </p>
+                            <p className="text-[10px] text-muted-foreground">匹配度</p>
+                          </div>
+                        </div>
+                      </div>
+                    </AnimatedContent>
+                  )}
+
+                  {/* Two-column: document previews + agent timeline */}
+                  <div className="grid lg:grid-cols-[1fr_280px] gap-5">
+                    {/* Left: Two A4 document previews side by side */}
+                    <div>
+                      {sections.length > 0 ? (
+                        <>
+                          {/* Document labels */}
+                          <div className="grid grid-cols-2 gap-5 mb-3">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-semibold text-muted-foreground">📄 原始简历</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-semibold" style={{ color: 'hsl(var(--secondary))' }}>✨ AI 定制版本</span>
+                              <span className="text-[9px] px-1.5 py-0.5 rounded font-bold" style={{ background: 'hsl(var(--secondary) / 0.1)', color: 'hsl(var(--secondary))' }}>已投递</span>
+                            </div>
+                          </div>
+
+                          {/* Two A4 paper documents side by side */}
+                          <div className="grid grid-cols-2 gap-5">
+                            {/* ─── Left paper: Original Resume (embedded PDF from Supabase Storage) ─── */}
+                            <div className="rounded-lg overflow-hidden relative" style={{
+                              background: '#f5f5f5',
+                              boxShadow: '0 2px 20px rgba(0,0,0,0.08), 0 0 1px rgba(0,0,0,0.1)',
+                              aspectRatio: '210 / 297',
+                              maxHeight: '820px',
+                            }}>
+                              {detail.resume_signed_url ? (
+                                <iframe
+                                  src={detail.resume_signed_url}
+                                  className="w-full h-full border-0"
+                                  title="原始简历 PDF"
+                                  style={{ background: '#fff' }}
+                                />
+                              ) : (
+                                <div className="h-full flex items-center justify-center p-8 text-center">
+                                  <div>
+                                    <p className="text-sm text-gray-400 mb-1">原始简历 PDF</p>
+                                    <p className="text-xs text-gray-300">上传简历后将在此处显示</p>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* ─── Right paper: AI Tailored Resume ─── */}
+                            <div className="relative">
+                              {/* Toggle tabs overlapping top-right */}
+                              <div className="absolute -top-3 right-4 z-10 flex rounded-lg overflow-hidden" style={{ boxShadow: '0 2px 8px rgba(0,0,0,0.12)' }}>
+                                <button
+                                  onClick={() => setRightDocMode('diff')}
+                                  className={`px-3 py-1.5 text-[10px] font-bold transition-colors ${
+                                    rightDocMode === 'diff' ? 'text-white' : 'text-gray-600 hover:text-gray-900'
+                                  }`}
+                                  style={{ background: rightDocMode === 'diff' ? 'hsl(var(--secondary))' : '#fff' }}
+                                >
+                                  修改标注
+                                </button>
+                                <button
+                                  onClick={() => setRightDocMode('clean')}
+                                  className={`px-3 py-1.5 text-[10px] font-bold transition-colors ${
+                                    rightDocMode === 'clean' ? 'text-white' : 'text-gray-600 hover:text-gray-900'
+                                  }`}
+                                  style={{ background: rightDocMode === 'clean' ? 'hsl(var(--foreground))' : '#fff' }}
+                                >
+                                  最终预览
+                                </button>
+                              </div>
+
+                              <div data-print-target className="rounded-lg overflow-hidden" style={{
+                                background: '#fff',
+                                boxShadow: '0 2px 20px rgba(0,0,0,0.08), 0 0 1px rgba(0,0,0,0.1)',
+                                aspectRatio: '210 / 297',
+                                maxHeight: '820px',
+                              }}>
+                                {rightDocMode === 'diff' && (
+                                  <div className="absolute top-8 right-8 px-2 py-0.5 rounded text-[8px] font-bold tracking-wider z-10" style={{ background: 'hsl(var(--secondary) / 0.08)', color: 'hsl(var(--secondary))' }}>
+                                    AI TAILORED
+                                  </div>
+                                )}
+                                <div ref={pdfRef} className="h-full overflow-y-auto p-8" style={{ fontFamily: "'Georgia', 'Times New Roman', 'Noto Serif SC', serif" }}>
+                                  {/* Name header — from profile baseline */}
+                                  {detail.profile && (
+                                    <div className="text-center mb-5 pb-4" style={{ borderBottom: '2px solid #333' }}>
+                                      <h3 className="text-[22px] font-bold text-gray-900">{detail.profile.full_name}</h3>
+                                      {detail.profile.contact_email && (
+                                        <p className="text-[10px] text-gray-500 mt-1.5">
+                                          ✉ {detail.profile.contact_email}
+                                        </p>
+                                      )}
+                                    </div>
+                                  )}
+
+                                  {/* Sections — diff mode vs clean mode */}
+                                  {sections.map((section, i) => {
+                                    const hasChanges = section.changes_made && section.changes_made.length > 0;
+                                    const isExpanded = expandedSections.has(i);
+                                    const showDiff = rightDocMode === 'diff';
+
+                                    return (
+                                      <div key={i} className="mb-4">
+                                        <div className="flex items-center gap-1.5 mb-1 pb-0.5" style={{ borderBottom: '1px solid #999' }}>
+                                          <h4 className="text-[13px] font-bold text-gray-900" style={{ letterSpacing: '0.05em' }}>
+                                            {section.section_name}
+                                          </h4>
+                                          {showDiff && hasChanges && (
+                                            <span className="text-[8px] px-1 py-0.5 rounded font-bold" style={{ background: 'hsl(var(--secondary) / 0.1)', color: 'hsl(var(--secondary))' }}>已优化</span>
+                                          )}
+                                        </div>
+
+                                        {/* Content: clean = no highlights; diff = highlights + notes */}
+                                        <div
+                                          className={`text-[10.5px] leading-[1.55] whitespace-pre-wrap ${showDiff && hasChanges ? 'text-gray-900' : 'text-gray-700'}`}
+                                          style={showDiff && hasChanges ? { background: 'rgba(82, 100, 80, 0.04)', padding: '6px 8px', borderRadius: '4px', borderLeft: '2px solid rgba(82, 100, 80, 0.25)' } : undefined}
+                                        >
+                                          {section.tailored_text}
+                                        </div>
+
+                                        {/* Change notes — only in diff mode */}
+                                        {showDiff && hasChanges && (
+                                          <div className="mt-1">
+                                            <button onClick={() => toggleSection(i)} className="text-[10px] font-semibold flex items-center gap-0.5" style={{ color: 'hsl(var(--secondary))' }}>
+                                              <span style={{ transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.2s', display: 'inline-block', fontSize: '8px' }}>▸</span>
+                                              {isExpanded ? '收起' : `查看修改 (${section.changes_made!.length})`}
+                                            </button>
+                                            {isExpanded && (
+                                              <div className="mt-1 pl-2 space-y-0.5" style={{ borderLeft: '1.5px solid hsl(var(--secondary) / 0.2)' }}>
+                                                {section.changes_made!.map((c, j) => (
+                                                  <p key={j} className="text-[10px] text-gray-500">• {c}</p>
+                                                ))}
+                                              </div>
+                                            )}
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Submission status below documents */}
+                          {detail.submission_attempts.length > 0 && (
+                            <div className="mt-5 flex gap-3 flex-wrap">
+                              {detail.submission_attempts.map(s => (
+                                <div key={s.id} className="rounded-xl p-3 flex items-center gap-3" style={{ background: 'hsl(var(--surface-low))' }}>
+                                  <div className={`w-2.5 h-2.5 rounded-full ${
+                                    s.execution_outcome === 'confirmed_submitted' ? 'bg-[hsl(var(--status-active))]' :
+                                    s.execution_outcome === 'failed' ? 'bg-[hsl(var(--status-error))]' :
+                                    'bg-[hsl(var(--status-info))]'
+                                  }`} />
+                                  <span className="text-xs font-semibold">
+                                    {s.execution_outcome === 'confirmed_submitted' ? '投递成功' : s.execution_outcome === 'failed' ? '投递失败' : s.execution_outcome}
+                                  </span>
+                                  {s.started_at && <span className="text-[10px] text-muted-foreground ml-1">{timeAgo(s.started_at)}</span>}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <div className="surface-card p-6">
+                          <p className="text-sm text-muted-foreground mb-1">此机会暂无 AI 材料</p>
+                          <p className="text-xs text-muted-foreground/50">AI 完成简历定制后，文档对比将自动出现</p>
+                          {detail.opportunity.job_description_text && (
+                            <div className="mt-4 pt-4 border-t border-border/20">
+                              <p className="text-xs font-label uppercase tracking-widest text-muted-foreground mb-2">职位描述</p>
+                              <p className="text-sm text-muted-foreground leading-relaxed whitespace-pre-wrap max-h-[300px] overflow-y-auto">{stripHtml(detail.opportunity.job_description_text)}</p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Right: Agent timeline sidebar */}
+                    <div>
+                      <SpotlightCard className="surface-card p-4 rounded-2xl">
+                        <h3 className="text-xs font-display font-bold mb-0.5">智能体工作日志</h3>
+                        <p className="text-[10px] text-muted-foreground mb-3">多智能体协作</p>
+                        <div className="space-y-0">
+                          {detail.timeline.slice(0, 8).map((e, i) => {
+                            const agentLabel = AGENT_LABELS[e.event_type] || (e.actor_type === 'user' ? '你' : '系统');
+                            const isSuccess = e.event_type.includes('success') || e.event_type.includes('completed') || e.event_type.includes('screened');
+                            const isFail = e.event_type.includes('failed');
+                            return (
+                              <div key={e.id} className="flex gap-2.5 pb-3">
+                                <div className="flex flex-col items-center">
+                                  <div className={`w-2 h-2 rounded-full mt-1 flex-shrink-0 ${
+                                    isFail ? 'bg-[hsl(var(--status-error))]' :
+                                    isSuccess ? 'bg-[hsl(var(--status-active))]' :
+                                    'bg-[hsl(var(--status-info))]'
+                                  }`} />
+                                  {i < Math.min(detail.timeline.length, 8) - 1 && (
+                                    <div className="w-px flex-1 mt-1" style={{ background: 'hsl(var(--border) / 0.2)' }} />
+                                  )}
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-1.5 mb-0.5">
+                                    <span className="text-[11px] font-semibold">{agentLabel}</span>
+                                    <span className="text-[9px] text-muted-foreground">{timeAgo(e.occurred_at)}</span>
+                                  </div>
+                                  <p className="text-[11px] text-muted-foreground leading-relaxed truncate">{e.summary_text}</p>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </SpotlightCard>
+                    </div>
+                  </div>
+                </>
+              ) : null}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

@@ -41,6 +41,9 @@ const THEMES: Record<ThemeMode, {
       '--status-warning': '38 92% 50%',
       '--status-error': '0 84% 60%',
       '--status-info': '221 83% 53%',
+      '--diff-bg-intensity': '0.12',
+      '--diff-border-intensity': '0.4',
+      '--diff-strategy-bg': '0.1',
     },
   },
   moonlight: {
@@ -68,6 +71,9 @@ const THEMES: Record<ThemeMode, {
       '--status-warning': '38 92% 50%',
       '--status-error': '0 84% 60%',
       '--status-info': '221 83% 53%',
+      '--diff-bg-intensity': '0.12',
+      '--diff-border-intensity': '0.4',
+      '--diff-strategy-bg': '0.1',
     },
   },
   day: {
@@ -149,6 +155,9 @@ const THEMES: Record<ThemeMode, {
       '--status-warning': '38 55% 52%',
       '--status-error': '0 65% 60%',
       '--status-info': '210 50% 65%',
+      '--diff-bg-intensity': '0.1',
+      '--diff-border-intensity': '0.35',
+      '--diff-strategy-bg': '0.08',
     },
   },
   snowy: {

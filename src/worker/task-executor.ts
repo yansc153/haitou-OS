@@ -17,6 +17,8 @@ import {
 } from '../shared/state-machines.js';
 import { PipelineOrchestrator } from './pipeline.js';
 import { executeSkill } from './skills/runtime.js';
+import { HandoffDetectionService } from './services/handoff-detection.js';
+import { pollLinkedInInbox } from './executors/linkedin.js';
 
 type AgentTask = {
   id: string;
@@ -44,19 +46,26 @@ const RETRY_CONFIG: Record<string, { maxRetries: number; backoffMs: number[] }> 
 
 export class TaskExecutor {
   private pipeline: PipelineOrchestrator;
+  private handoffDetection: HandoffDetectionService;
 
   constructor(private db: SupabaseClient) {
     this.pipeline = new PipelineOrchestrator(db);
+    this.handoffDetection = new HandoffDetectionService(db);
   }
 
   async execute(task: AgentTask): Promise<void> {
     try {
       console.log(`[executor] Running task ${task.id} (${task.task_type}) for team ${task.team_id}`);
 
+      // Mark agent as working
+      await this.db.from('agent_instance')
+        .update({ runtime_state: 'active', last_active_at: new Date().toISOString() })
+        .eq('id', task.agent_instance_id);
+
       // Route to appropriate handler based on task_type
       const result = await this.routeTask(task);
 
-      // Mark completed
+      // Mark task completed
       await this.db
         .from('agent_task')
         .update({
@@ -66,18 +75,29 @@ export class TaskExecutor {
         })
         .eq('id', task.id);
 
-      // Update agent instance stats
+      // Mark agent back to ready
+      await this.db.from('agent_instance')
+        .update({
+          runtime_state: 'ready',
+          last_active_at: new Date().toISOString(),
+        })
+        .eq('id', task.agent_instance_id);
+
       await this.db.rpc('increment_agent_tasks_completed', {
         p_agent_id: task.agent_instance_id,
-      }).then(() => {}, () => {
-        // RPC may not exist yet — non-critical
-      });
+      }).then(() => {}, () => {});
 
       // Create timeline event
       await this.createTimelineEvent(task, result.summary);
 
       console.log(`[executor] Task ${task.id} completed`);
     } catch (err) {
+      // Mark agent back to ready on failure too
+      await this.db.from('agent_instance')
+        .update({ runtime_state: 'ready', last_active_at: new Date().toISOString() })
+        .eq('id', task.agent_instance_id)
+        .then(() => {}, () => {});
+
       await this.handleFailure(task, err as Error);
     }
   }
@@ -86,11 +106,11 @@ export class TaskExecutor {
     switch (task.task_type) {
       case 'opportunity_discovery':
         await this.pipeline.runDiscoveryCycle(task.team_id);
-        return { summary: 'Discovery cycle completed' };
+        return { summary: '岗位发现周期完成' };
 
-      case 'screening':
+      case 'screening': {
         if (task.related_entity_id) {
-          // Get pipeline mode from opportunity's platform
+          // Screen a specific opportunity
           const { data: opp } = await this.db
             .from('opportunity')
             .select('source_platform_id')
@@ -107,24 +127,180 @@ export class TaskExecutor {
             task.related_entity_id,
             platform?.pipeline_mode || 'full_tailored'
           );
+          return { summary: '已完成 1 个岗位的筛选评估' };
         }
-        return { summary: 'Screening pipeline completed' };
+
+        // Batch screening: screen up to 5 unscreened opportunities
+        const { data: unscreened } = await this.db
+          .from('opportunity')
+          .select('id, source_platform_id')
+          .eq('team_id', task.team_id)
+          .eq('stage', 'discovered')
+          .order('created_at', { ascending: true })
+          .limit(5);
+
+        let screened = 0;
+        for (const opp of (unscreened || [])) {
+          const { data: plat } = await this.db
+            .from('platform_definition')
+            .select('pipeline_mode')
+            .eq('id', opp.source_platform_id)
+            .single();
+          try {
+            await this.pipeline.runScreeningPipeline(
+              task.team_id, opp.id, plat?.pipeline_mode || 'full_tailored'
+            );
+            screened++;
+          } catch (e) {
+            console.error(`[executor] Screening failed for opp ${opp.id}:`, (e as Error).message);
+          }
+        }
+        return { summary: `批量筛选完成：${screened}/${unscreened?.length || 0} 个岗位` };
+      }
+
+      case 'material_generation': {
+        if (!task.related_entity_id) {
+          return { summary: 'material_generation skipped: no related opportunity' };
+        }
+        const { data: opp } = await this.db
+          .from('opportunity')
+          .select('*')
+          .eq('id', task.related_entity_id)
+          .single();
+        if (!opp) return { summary: 'material_generation skipped: opportunity not found' };
+
+        const { data: baseline } = await this.db
+          .from('profile_baseline')
+          .select('*')
+          .eq('team_id', task.team_id)
+          .order('version', { ascending: false })
+          .limit(1)
+          .single();
+        if (!baseline) return { summary: 'material_generation skipped: no profile baseline' };
+
+        await this.pipeline.runMaterialPipeline(task.team_id, task.related_entity_id, baseline, opp);
+        return { summary: `已为「${opp.job_title}」生成投递材料` };
+      }
+
+      case 'submission': {
+        if (!task.related_entity_id) {
+          return { summary: 'submission skipped: no related opportunity' };
+        }
+        const { data: opp } = await this.db
+          .from('opportunity')
+          .select('*')
+          .eq('id', task.related_entity_id)
+          .single();
+        if (!opp) return { summary: 'submission skipped: opportunity not found' };
+
+        await this.pipeline.runSubmission(task.team_id, task.related_entity_id, opp);
+        return { summary: `已投递「${opp.job_title}」@ ${opp.company_name}` };
+      }
 
       case 'first_contact':
-      case 'reply_processing':
       case 'follow_up': {
-        // These use LLM skills directly
-        const skillMap: Record<string, string> = {
-          first_contact: 'first-contact-drafting',
-          reply_processing: 'reply-reading',
-          follow_up: 'first-contact-drafting', // reuses similar prompt
-        };
-        const skillCode = skillMap[task.task_type];
-        if (skillCode) {
-          const result = await executeSkill(skillCode, { task_context: task.input_summary });
-          return { summary: result.success ? `${task.task_type} completed` : `${task.task_type} failed: ${result.error}` };
+        const skillCode = task.task_type === 'first_contact' ? 'first-contact-drafting' : 'follow-up-drafting';
+        const result = await executeSkill(skillCode, { task_context: task.input_summary });
+        return { summary: result.success ? `${task.task_type} completed` : `${task.task_type} failed: ${result.error}` };
+      }
+
+      case 'reply_processing': {
+        if (!task.related_entity_id) {
+          return { summary: 'reply_processing skipped: no related opportunity' };
         }
-        return { summary: `${task.task_type} completed (no skill mapped)` };
+
+        // Step 0: Poll platform for new messages and insert into DB
+        await this.fetchPlatformMessages(task.team_id, task.related_entity_id);
+
+        // Fetch conversation thread and recent inbound messages for this opportunity
+        const { data: thread } = await this.db
+          .from('conversation_thread')
+          .select('id')
+          .eq('opportunity_id', task.related_entity_id)
+          .eq('team_id', task.team_id)
+          .order('latest_message_at', { ascending: false })
+          .limit(1)
+          .single();
+
+        if (!thread) {
+          return { summary: 'reply_processing skipped: no conversation thread found' };
+        }
+
+        // Get recent unprocessed inbound messages
+        const { data: messages } = await this.db
+          .from('conversation_message')
+          .select('id, content_text, direction, sent_at, reply_posture')
+          .eq('thread_id', thread.id)
+          .eq('direction', 'inbound')
+          .is('reply_posture', null)
+          .order('sent_at', { ascending: false })
+          .limit(5);
+
+        if (!messages || messages.length === 0) {
+          return { summary: 'reply_processing skipped: no unprocessed inbound messages' };
+        }
+
+        // Build context with real message content
+        const messageTexts = messages.map((m: { content_text: string; sent_at: string }) =>
+          `[${m.sent_at}] ${m.content_text}`
+        ).join('\n\n');
+
+        // Call reply-reading skill with real message content
+        const replyResult = await executeSkill('reply-reading', {
+          message_content: messageTexts,
+          task_context: task.input_summary || '',
+        });
+        if (!replyResult.success) {
+          return { summary: `reply_processing failed: ${replyResult.error}` };
+        }
+
+        const output = replyResult.output as {
+          reply_posture?: string;
+          handoff_recommended?: boolean;
+          handoff_reason?: string;
+          contains_salary_discussion?: boolean;
+          contains_interview_scheduling?: boolean;
+          contains_private_channel_request?: boolean;
+          extracted_signals?: string[];
+          asks_or_requests?: string[];
+          summary_text?: string;
+        };
+
+        // Update processed messages with extracted signals
+        for (const msg of messages) {
+          await this.db
+            .from('conversation_message')
+            .update({
+              reply_posture: output.reply_posture || 'neutral',
+              extracted_signals: output.extracted_signals || [],
+              asks_or_requests: output.asks_or_requests || [],
+            })
+            .eq('id', msg.id);
+        }
+
+        // Handoff detection: check LLM recommendation + regex boundary scan
+        if (output.handoff_recommended) {
+          let handoffType = 'general';
+          if (output.contains_salary_discussion) handoffType = 'salary_confirmation';
+          else if (output.contains_interview_scheduling) handoffType = 'interview_time';
+          else if (output.contains_private_channel_request) handoffType = 'private_contact';
+
+          // Regex-based detection on raw message text for more precise type
+          const regexBoundary = this.handoffDetection.detectBoundary(messageTexts);
+          if (regexBoundary) handoffType = regexBoundary.type;
+
+          await this.handoffDetection.createHandoff({
+            teamId: task.team_id,
+            opportunityId: task.related_entity_id,
+            handoffType,
+            urgency: regexBoundary?.urgency || 'high',
+            sourceAgentId: task.agent_instance_id,
+            reason: output.handoff_reason || 'Boundary detected in conversation',
+            contextSummary: output.summary_text || '',
+          });
+        }
+
+        return { summary: `reply_processing: ${messages.length} messages analyzed${output.handoff_recommended ? ' — handoff created' : ''}` };
       }
 
       default:
@@ -219,5 +395,100 @@ export class TaskExecutor {
       visibility: 'feed',
       idempotency_key: `task_complete_${task.id}`,
     });
+  }
+
+  /**
+   * Poll platform for new messages and insert into conversation_message table.
+   * Currently supports LinkedIn; other platforms to be added.
+   */
+  private async fetchPlatformMessages(teamId: string, opportunityId: string): Promise<void> {
+    // Get opportunity's platform
+    const { data: opp } = await this.db
+      .from('opportunity')
+      .select('source_platform_id')
+      .eq('id', opportunityId)
+      .single();
+    if (!opp) return;
+
+    const { data: platformDef } = await this.db
+      .from('platform_definition')
+      .select('code')
+      .eq('id', opp.source_platform_id)
+      .single();
+    if (!platformDef) return;
+
+    // Get active connection with session
+    const { data: conn } = await this.db
+      .from('platform_connection')
+      .select('id, session_token_ref')
+      .eq('team_id', teamId)
+      .eq('platform_id', opp.source_platform_id)
+      .eq('status', 'active')
+      .single();
+    if (!conn?.session_token_ref) return;
+
+    // Get or create conversation thread
+    let { data: thread } = await this.db
+      .from('conversation_thread')
+      .select('id, platform_thread_id')
+      .eq('opportunity_id', opportunityId)
+      .eq('team_id', teamId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (platformDef.code === 'linkedin') {
+      const polled = await pollLinkedInInbox({ sessionCookies: conn.session_token_ref });
+      if (polled.length === 0) return;
+
+      // Create thread if it doesn't exist
+      if (!thread) {
+        const { data: newThread } = await this.db
+          .from('conversation_thread')
+          .insert({
+            team_id: teamId,
+            opportunity_id: opportunityId,
+            platform_connection_id: conn.id,
+            platform_thread_id: polled[0].threadId,
+            thread_status: 'active',
+            message_count: 0,
+          })
+          .select('id, platform_thread_id')
+          .single();
+        thread = newThread;
+      }
+      if (!thread) return;
+
+      // Insert new messages (dedup by platform_message_id)
+      for (const msg of polled) {
+        const platformMsgId = `linkedin:${msg.threadId}:${msg.receivedAt}`;
+        const { count } = await this.db
+          .from('conversation_message')
+          .select('id', { count: 'exact', head: true })
+          .eq('platform_message_id', platformMsgId);
+
+        if (count && count > 0) continue;
+
+        await this.db.from('conversation_message').insert({
+          thread_id: thread.id,
+          team_id: teamId,
+          platform_message_id: platformMsgId,
+          direction: 'inbound',
+          message_type: 'reply',
+          content_text: msg.messageText,
+          sent_at: msg.receivedAt,
+        });
+      }
+
+      // Update thread metadata
+      await this.db
+        .from('conversation_thread')
+        .update({
+          latest_message_at: polled[0].receivedAt,
+          message_count: thread.platform_thread_id ? undefined : polled.length,
+        })
+        .eq('id', thread.id);
+    }
+    // Other platforms: zhaopin, lagou, etc. — to be implemented per their specs
   }
 }

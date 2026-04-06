@@ -757,7 +757,25 @@ Supabase Auth handles OAuth provider integration (Google, GitHub, WeChat). The `
 
 ### GET `/api/opportunities/:id`
 
-Returns `OpportunityDetail` including collaboration chain and timeline.
+Returns `OpportunityDetail` including collaboration chain, timeline, and **full material content**.
+
+The `materials` array in the response MUST include `content_text` for frontend material preview:
+
+```typescript
+materials: Array<{
+  id: string;
+  material_type: string;
+  status: string;
+  language: string;
+  version: number;
+  content_text: string | null;  // Full content for preview
+  created_at: string;
+}>
+```
+
+**Material content format by type:**
+- `standard_tailored_resume`: JSON `{ tailored_sections: [{ section_name, tailored_text, changes_made }], emphasis_strategy }`
+- `cover_letter`: JSON `{ full_text, opening, value_proposition, closing }`
 
 ### GET `/api/handoffs/:id`
 

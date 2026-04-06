@@ -79,6 +79,22 @@ serve(async (req) => {
     frontend_status: mapAgentFrontendStatus(a.runtime_state as string),
   }));
 
+  // Compute today's operation stats
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const todayIso = todayStart.toISOString();
+
+  const [discoveredRes, screenedRes, submittedRes, materialsRes] = await Promise.all([
+    supabase!.from('opportunity').select('id', { count: 'exact', head: true })
+      .eq('team_id', team.id).gte('created_at', todayIso),
+    supabase!.from('opportunity').select('id', { count: 'exact', head: true })
+      .eq('team_id', team.id).neq('stage', 'discovered').gte('stage_changed_at', todayIso),
+    supabase!.from('submission_attempt').select('id', { count: 'exact', head: true })
+      .eq('team_id', team.id).gte('created_at', todayIso),
+    supabase!.from('material').select('id', { count: 'exact', head: true })
+      .eq('team_id', team.id).gte('created_at', todayIso),
+  ]);
+
   return ok({
     user: { id: user!.id, email: user!.email, display_name: user!.user_metadata?.full_name },
     team: {
@@ -94,6 +110,13 @@ serve(async (req) => {
       runtime_status: team.runtime_status,
       effective_balance_seconds: effectiveBalance,
       pause_origin: team.pause_origin,
+    },
+    today_stats: {
+      discovered: discoveredRes.count || 0,
+      screened: screenedRes.count || 0,
+      submitted: submittedRes.count || 0,
+      materials_generated: materialsRes.count || 0,
+      total_llm_calls: team.total_llm_calls || 0,
     },
     agents,
     live_feed: feedRes.data || [],

@@ -58,8 +58,8 @@ export function AgentBadge({ agent, size = 'normal' }: { agent: AgentInfo; size?
       </div>
 
       {/* Identity */}
-      <h3 className="text-base font-semibold font-display">{agent.title_zh}</h3>
-      <p className="text-sm text-muted-foreground font-label">{agent.persona_name}</p>
+      <h3 className="text-base font-semibold font-display text-foreground">{agent.title_zh}</h3>
+      <p className="text-sm text-muted-foreground/80 font-label">{agent.persona_name}</p>
 
       {/* Divider */}
       <div className="w-12 h-px bg-border/30 my-3" />

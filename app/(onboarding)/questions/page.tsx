@@ -25,8 +25,9 @@ export default function QuestionsPage() {
     async function load() {
       try {
         const { createClient } = await import('@/lib/supabase/client');
+        const { getValidSession } = await import('@/lib/hooks/use-api');
         const supabase = createClient();
-        const { data: { session } } = await supabase.auth.getSession();
+        const session = await getValidSession(supabase);
         if (!session) return;
         const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/onboarding-get`, {
           headers: { Authorization: `Bearer ${session.access_token}` },
@@ -45,8 +46,9 @@ export default function QuestionsPage() {
     setSaving(true);
     try {
       const { createClient } = await import('@/lib/supabase/client');
+      const { getValidSession } = await import('@/lib/hooks/use-api');
       const supabase = createClient();
-      const { data: { session } } = await supabase.auth.getSession();
+      const session = await getValidSession(supabase);
       if (session) {
         await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/onboarding-draft`, {
           method: 'PATCH',

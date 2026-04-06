@@ -1,16 +1,22 @@
 /**
  * 拉勾 (Lagou) Platform Executor — Passthrough Pipeline
  *
- * - Discovery: Browser-based keyword search
- * - Apply: Browser form submit with platform-stored resume
- * - Dedup: Check for 已投递 state before submitting
- * - Session: Cookie-based, browser-backed
+ * Anti-scraping: Moderate | Session: cookie | Headless: Yes
+ * Apply method: browser_form | Pipeline: passthrough
+ * Daily budget: 30 | Delays: 2-5s
  *
- * IMPORTANT: Passthrough pipeline — no material generation.
+ * Per spec mandatory non-goals:
+ * - Do NOT build 招聘关系经理 around 拉勾网页聊天
+ * - App-directed chat prompt is a handoff signal, not an automation target
  *
  * Source: PLATFORM_RULE_AND_AGENT_SPEC.md § 拉勾
- * Source: Platform Research § Experiments L1-L9
  */
+
+import { createContext, randomDelay } from '../utils/browser-pool.js';
+import type { Page } from 'playwright';
+
+const DAILY_BUDGET = { applications: 30 };
+const DELAY = { page: [2000, 5000] as const, click: [1000, 2000] as const };
 
 type LagouJob = {
   job_title: string;
@@ -22,15 +28,9 @@ type LagouJob = {
   external_ref: string;
 };
 
-const DAILY_BUDGET = { applications: 30 };
-
 /**
  * Discover jobs via 拉勾 keyword search.
- *
- * Known platform behavior:
- * - Keyword search pages are stable and query-specific
- * - Detail routes are stable once position IDs are known
- * - Search URL pattern: www.lagou.com/wn/zhaopin?...
+ * URL pattern: www.lagou.com/wn/zhaopin?...
  */
 export async function discoverLagouJobs(params: {
   sessionCookies: string;
@@ -38,72 +38,213 @@ export async function discoverLagouJobs(params: {
   city?: string;
   limit?: number;
 }): Promise<LagouJob[]> {
-  console.log(`[lagou] Stub discovery: keywords=${params.keywords.join(', ')}, city=${params.city || 'all'}`);
-  // Real implementation:
-  // 1. Launch Playwright with injected cookies
-  // 2. Navigate to keyword search route
-  // 3. Extract job cards from search results
-  // 4. Navigate to detail pages for full JD
-  return [];
+  const limit = params.limit ?? 10;
+  const context = await createContext({ cookies: params.sessionCookies });
+  const page = await context.newPage();
+
+  try {
+    const keyword = params.keywords.join(' ');
+    const searchUrl = `https://www.lagou.com/wn/zhaopin?kd=${encodeURIComponent(keyword)}${params.city ? `&city=${encodeURIComponent(params.city)}` : ''}`;
+
+    await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await randomDelay(DELAY.page[0], DELAY.page[1]);
+
+    if (isLoginPage(page)) {
+      console.warn('[lagou] Session expired — login redirect');
+      return [];
+    }
+
+    const jobs: LagouJob[] = [];
+    const cards = page.locator('.item__10RTO, .position-list-item, .list_item_top');
+    const count = Math.min(await cards.count(), limit);
+
+    for (let i = 0; i < count; i++) {
+      try {
+        const card = cards.nth(i);
+        await card.scrollIntoViewIfNeeded();
+
+        const title = await card.locator('.p-top__1F7CL a, .position-name, .name__LmEJu').first().textContent() || '';
+        const company = await card.locator('.company-name__2-SjF, .company_name').first().textContent() || '';
+        const location = await card.locator('.add__laeGV, .position-address').first().textContent() || '';
+        const salary = await card.locator('.money__3Lkgq, .position-salary').first().textContent().catch(() => '') || '';
+
+        const linkEl = card.locator('a[href*="/jobs/"], a[href*="positionId"]').first();
+        const href = await linkEl.getAttribute('href') || '';
+
+        const jobId = href.match(/\/jobs\/(\d+)/)?.[1] || href.match(/positionId=(\d+)/)?.[1] || `lagou-${i}`;
+
+        if (title.trim()) {
+          jobs.push({
+            job_title: title.trim(),
+            company_name: company.trim(),
+            location_label: location.trim(),
+            salary_text: salary.trim() || undefined,
+            job_description_url: href.startsWith('http') ? href : `https://www.lagou.com/jobs/${jobId}.html`,
+            job_description_text: '',
+            external_ref: `lagou:${jobId}`,
+          });
+        }
+      } catch { /* skip card */ }
+    }
+
+    // Load JD for top results
+    for (const job of jobs.slice(0, 5)) {
+      try {
+        await page.goto(job.job_description_url, { waitUntil: 'domcontentloaded', timeout: 15000 });
+        await randomDelay(DELAY.page[0], DELAY.page[1]);
+        const jd = await page.locator('.job-detail, .job_bt, .position-content').first().textContent();
+        job.job_description_text = jd?.trim() || '';
+      } catch { /* skip detail */ }
+    }
+
+    return jobs;
+
+  } catch (err) {
+    console.error(`[lagou] Discovery error: ${err instanceof Error ? err.message : err}`);
+    return [];
+  } finally {
+    await page.close();
+    await context.close();
+  }
 }
 
 /**
  * Submit application via 拉勾 web apply.
- * Uses the platform's stored resume (online or previously uploaded attachment).
+ * Passthrough: uses platform-stored resume.
  *
- * Validated behavior from research:
- * - Web-side apply is supported
- * - Multi-position repeated delivery is possible
- * - Same-position duplicate delivery is UI-blocked (已投递 state)
+ * Flow: Navigate detail → dedup check (已投递) → click apply → detect 已投递
  */
 export async function submitLagouApplication(params: {
   sessionCookies: string;
-  jobDetailUrl: string;
+  jobUrl: string;
 }): Promise<{
   outcome: 'success' | 'soft_failure' | 'hard_failure';
   confirmationSignal?: string;
   errorMessage?: string;
   isDuplicate?: boolean;
 }> {
-  console.log(`[lagou] Stub apply to: ${params.jobDetailUrl}`);
-  // Real implementation:
-  // 1. Navigate to job detail page
-  // 2. Check for 已投递 state → if yes, return isDuplicate=true
-  // 3. Click apply button
-  // 4. Detect state change to 已投递
-  // 5. Handle any confirmation dialog
-  return {
-    outcome: 'success',
-    confirmationSignal: 'Stub: 拉勾 application submitted (已投递)',
-    isDuplicate: false,
-  };
+  const context = await createContext({ cookies: params.sessionCookies });
+  const page = await context.newPage();
+
+  try {
+    await page.goto(params.jobUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await randomDelay(DELAY.page[0], DELAY.page[1]);
+
+    if (isLoginPage(page)) {
+      return { outcome: 'hard_failure', errorMessage: 'Session expired' };
+    }
+
+    // Dedup: check for 已投递 state
+    const pageText = await page.textContent('body') || '';
+    if (/已投递|已申请/.test(pageText)) {
+      return { outcome: 'soft_failure', errorMessage: 'Already applied (已投递)', isDuplicate: true };
+    }
+
+    // Click apply button
+    const applyBtn = page.locator('button:has-text("投递简历"), button:has-text("立即投递"), .apply-btn, .resume-delivery').first();
+    if (!(await applyBtn.isVisible({ timeout: 5000 }).catch(() => false))) {
+      return { outcome: 'soft_failure', errorMessage: 'Apply button not found' };
+    }
+
+    await applyBtn.click();
+    await randomDelay(DELAY.page[0], DELAY.page[1]);
+
+    // Check for resume selection dialog
+    const resumeDialog = page.locator('.resume-select-dialog, .delivery-dialog, .resume-list-dialog').first();
+    if (await resumeDialog.isVisible().catch(() => false)) {
+      // Select first available resume
+      const firstResume = resumeDialog.locator('.resume-item, input[type="radio"]').first();
+      if (await firstResume.isVisible().catch(() => false)) {
+        await firstResume.click();
+        await randomDelay(DELAY.click[0], DELAY.click[1]);
+      }
+      const confirmBtn = resumeDialog.locator('button:has-text("确定"), button:has-text("投递")').first();
+      if (await confirmBtn.isVisible().catch(() => false)) {
+        await confirmBtn.click();
+        await randomDelay(DELAY.page[0], DELAY.page[1]);
+      }
+    }
+
+    // Detect success
+    const finalText = await page.textContent('body') || '';
+    if (/已投递|投递成功|申请成功/.test(finalText)) {
+      return { outcome: 'success', confirmationSignal: '已投递 state detected', isDuplicate: false };
+    }
+
+    return { outcome: 'soft_failure', errorMessage: 'Apply clicked but no 已投递 confirmation' };
+
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error';
+    console.error(`[lagou] Submit error: ${msg}`);
+    return { outcome: 'soft_failure', errorMessage: msg };
+
+  } finally {
+    await page.close();
+    await context.close();
+  }
 }
 
 /**
- * Check if a specific job has already been applied to.
- * Dedup by detecting 已投递 on the detail page.
+ * Check if a job has already been applied to (dedup).
  */
 export async function checkLagouDuplicate(params: {
   sessionCookies: string;
   jobDetailUrl: string;
 }): Promise<boolean> {
-  console.log(`[lagou] Stub dedup check for: ${params.jobDetailUrl}`);
-  // Real implementation: navigate to detail page, check for 已投递 text
-  return false;
+  const context = await createContext({ cookies: params.sessionCookies });
+  const page = await context.newPage();
+
+  try {
+    await page.goto(params.jobDetailUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+    await randomDelay(DELAY.page[0], DELAY.page[1]);
+
+    const text = await page.textContent('body') || '';
+    return /已投递|已申请/.test(text);
+
+  } catch {
+    return false; // Can't determine, assume not duplicate
+  } finally {
+    await page.close();
+    await context.close();
+  }
 }
 
 /**
- * Check capability-level health for 拉勾.
+ * Capability-level health check.
  */
 export async function checkLagouCapabilityHealth(params: {
   sessionCookies: string;
 }): Promise<Record<string, 'healthy' | 'degraded' | 'blocked' | 'unknown'>> {
-  console.log(`[lagou] Stub capability health check`);
-  return {
-    search: 'unknown',
-    detail: 'unknown',
-    apply: 'unknown',
-    chat: 'unknown',
-    resume: 'unknown',
+  const context = await createContext({ cookies: params.sessionCookies });
+  const page = await context.newPage();
+  const caps: Record<string, 'healthy' | 'degraded' | 'blocked' | 'unknown'> = {
+    search: 'unknown', detail: 'unknown', apply: 'unknown', chat: 'unknown', resume: 'unknown',
   };
+
+  try {
+    await page.goto('https://www.lagou.com/wn/zhaopin?kd=test', { waitUntil: 'domcontentloaded', timeout: 15000 });
+    caps.search = isLoginPage(page) ? 'blocked' : 'healthy';
+
+    if (caps.search === 'healthy') {
+      const firstLink = await page.locator('a[href*="/jobs/"]').first().getAttribute('href').catch(() => null);
+      if (firstLink) {
+        const detailUrl = firstLink.startsWith('http') ? firstLink : `https://www.lagou.com${firstLink}`;
+        await page.goto(detailUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+        const hasJd = await page.locator('.job-detail, .job_bt').first().isVisible().catch(() => false);
+        caps.detail = hasJd ? 'healthy' : 'degraded';
+      }
+    }
+  } catch {
+    // Leave as unknown
+  } finally {
+    await page.close();
+    await context.close();
+  }
+
+  return caps;
+}
+
+function isLoginPage(page: Page): boolean {
+  const url = page.url();
+  return url.includes('/login') || url.includes('/utrack/login') || url.includes('/passport');
 }
