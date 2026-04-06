@@ -17,5 +17,11 @@ test-results/
 /*.png
 /*.pdf
 
+# Supabase temp
+supabase/.temp/
+
+# E2E screenshots
+e2e/*.png
+
 # Platform research
 Platform Research/boss-cli/
