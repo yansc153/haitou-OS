@@ -32,7 +32,7 @@ jobs:
         run: npm run build
         env:
           NEXT_PUBLIC_SUPABASE_URL: "https://rlpipofmnqveughopxud.supabase.co"
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJscGlwb2ZtbnF2ZXVnaG9weHVkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3NTQ0NTMsImV4cCI6MjA5MDMzMDQ1M30.YfZ2VojcPQufYCayjq44jdWrkkESaXfWsQHxPxD55y8"
 
   # ━━━ Stage 2: Deploy Supabase Edge Functions (仅 main) ━━━
   deploy-edge-functions:
