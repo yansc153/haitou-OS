@@ -66,6 +66,13 @@ export default function SetupPage() {
         return;
       }
 
+      // Create team in draft mode so platform connections work in Step 3
+      await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/onboarding-complete`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'create_team' }),
+      });
+
       router.push('/extension');
     } catch (e) {
       setError(`请求失败: ${e instanceof Error ? e.message : '未知错误'}`);

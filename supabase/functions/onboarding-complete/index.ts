@@ -32,6 +32,13 @@ serve(async (req) => {
   const { user, error: authError } = await getAuthenticatedUser(req);
   if (authError) return authError;
 
+  // Parse mode: 'create_team' (Step 2) or 'activate' (Step 4, default)
+  let mode = 'activate';
+  try {
+    const body = await req.clone().json();
+    if (body.mode === 'create_team') mode = 'create_team';
+  } catch { /* no body = default activate */ }
+
   const serviceClient = getServiceClient();
 
   // Get draft and validate prereqs
@@ -45,7 +52,7 @@ serve(async (req) => {
     return err(404, 'NOT_FOUND', 'No onboarding draft found');
   }
 
-  if (!draft.resume_asset_id && draft.resume_upload_status !== 'uploaded' && draft.resume_upload_status !== 'processed') {
+  if (mode === 'activate' && !draft.resume_asset_id && draft.resume_upload_status !== 'uploaded' && draft.resume_upload_status !== 'processed') {
     return err(422, 'RESUME_MISSING', '请先上传简历');
   }
 
@@ -199,7 +206,8 @@ serve(async (req) => {
     }
   }
 
-  // ── Step 1: Create team (status=active from the start) ──
+  // ── Step 1: Create team ──
+  const isCreateOnly = mode === 'create_team';
   const planTier = 'free';
   const now = new Date().toISOString();
 
@@ -208,14 +216,14 @@ serve(async (req) => {
     .insert({
       user_id: user!.id,
       name: `${user!.email?.split('@')[0]}'s Team`,
-      status: 'active',
-      runtime_status: 'active',
+      status: isCreateOnly ? 'onboarding' : 'active',
+      runtime_status: isCreateOnly ? 'paused' : 'active',
       strategy_mode: answers.strategy_mode || 'balanced',
       coverage_scope: 'cross_market',
       onboarding_draft_id: draft.id,
       plan_tier: planTier,
-      started_at: now,
-      activated_at: now,
+      started_at: isCreateOnly ? null : now,
+      activated_at: isCreateOnly ? null : now,
     })
     .select()
     .single();
@@ -315,7 +323,40 @@ serve(async (req) => {
 
     if (agentError) throw new Error(`Failed to create agents: ${agentError.message}`);
 
-    // ── Step 7: Allocate runtime ──
+    // ── create_team mode: return early (team + agents created, not activated) ──
+    if (isCreateOnly) {
+      // Auto-connect Greenhouse + Lever (so they show as connected in Step 3)
+      const { data: publicPlatforms } = await serviceClient
+        .from('platform_definition')
+        .select('id, code')
+        .eq('supports_cookie_session', false);
+
+      if (publicPlatforms && publicPlatforms.length > 0) {
+        await serviceClient.from('platform_connection').insert(
+          publicPlatforms.map((p) => ({
+            team_id: team.id,
+            platform_id: p.id,
+            status: 'active' as const,
+            session_token_ref: null,
+            user_consent_granted_at: now,
+            user_consent_scope: 'apply_only' as const,
+          }))
+        );
+      }
+
+      await serviceClient.from('onboarding_draft')
+        .update({ team_id: team.id })
+        .eq('id', draft.id);
+
+      return created({
+        team_id: team.id,
+        agents_created: 7,
+        mode: 'create_team',
+        runtime_status: 'paused',
+      });
+    }
+
+    // ── Step 7: Allocate runtime (activate mode only) ──
     const allocationSeconds = PLAN_ALLOCATIONS[planTier] || 21600;
 
     await serviceClient.from('runtime_ledger_entry').insert({
@@ -327,27 +368,38 @@ serve(async (req) => {
       reason: `Initial ${planTier} plan allocation`,
     });
 
-    // ── Step 8: Auto-connect Greenhouse + Lever (public platforms, no cookie needed) ──
+    // ── Step 8: Auto-connect Greenhouse + Lever (if not already connected) ──
     const { data: publicPlatforms } = await serviceClient
       .from('platform_definition')
       .select('id, code')
       .eq('supports_cookie_session', false);
 
     if (publicPlatforms && publicPlatforms.length > 0) {
-      const { error: connError } = await serviceClient.from('platform_connection').insert(
-        publicPlatforms.map((p) => ({
-          team_id: team.id,
-          platform_id: p.id,
-          status: 'active' as const,
-          session_token_ref: null,
-          user_consent_granted_at: now,
-          user_consent_scope: 'apply_only' as const,
-        }))
-      );
-      if (connError) throw new Error(`Failed to connect platforms: ${connError.message}`);
+      for (const p of publicPlatforms) {
+        const { data: existing } = await serviceClient.from('platform_connection')
+          .select('id').eq('team_id', team.id).eq('platform_id', p.id).single();
+        if (!existing) {
+          await serviceClient.from('platform_connection').insert({
+            team_id: team.id,
+            platform_id: p.id,
+            status: 'active' as const,
+            session_token_ref: null,
+            user_consent_granted_at: now,
+            user_consent_scope: 'apply_only' as const,
+          });
+        }
+      }
     }
 
-    // ── Step 9: Record session_start (team auto-start) ──
+    // ── Step 9: Activate team ──
+    await serviceClient.from('team').update({
+      status: 'active',
+      runtime_status: 'active',
+      started_at: now,
+      activated_at: now,
+    }).eq('id', team.id);
+
+    // ── Step 10: Record session_start ──
     await serviceClient.from('runtime_ledger_entry').insert({
       team_id: team.id,
       entry_type: 'session_start',
@@ -357,7 +409,7 @@ serve(async (req) => {
       session_window_start: now,
     });
 
-    // ── Step 10: Timeline event ──
+    // ── Step 11: Timeline event ──
     await serviceClient.from('timeline_event').insert({
       team_id: team.id,
       event_type: 'team_started',
@@ -365,6 +417,12 @@ serve(async (req) => {
       actor_type: 'system',
       visibility: 'feed',
     });
+
+    // ── Step 12: Mark draft completed ──
+    await serviceClient.from('onboarding_draft').update({
+      team_id: team.id,
+      status: 'completed',
+    }).eq('id', draft.id);
 
     return created({
       team_id: team.id,
