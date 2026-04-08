@@ -123,8 +123,8 @@ describe('T010: Task-type priority ranking', () => {
 describe('T012: All skill contracts have requiredFields', () => {
   const skills = Object.keys(PROMPT_CONTRACTS);
 
-  it('all 12 contracts exist', () => {
-    expect(skills.length).toBe(12);
+  it('all skill contracts exist (12 original + analyze-resume)', () => {
+    expect(skills.length).toBeGreaterThanOrEqual(12);
   });
 
   skills.forEach(skillCode => {

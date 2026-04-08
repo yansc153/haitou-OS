@@ -333,7 +333,7 @@ export class PipelineOrchestrator {
               source_freshness: 'new',
             }).select('id').single();
           if (!opp) continue;
-          await this.runScreeningPipeline(teamId, opp.id, pipelineMode);
+          // Discovery only inserts — screening is a separate task created by dispatch loop
         }
       } catch (e) {
         console.log(`[greenhouse] Board "${slug}" error — skipping: ${(e as Error).message.slice(0, 80)}`);
@@ -370,7 +370,7 @@ export class PipelineOrchestrator {
               source_platform_id: platform.id as string, external_ref: job.external_ref,
               source_freshness: 'new',
             }).select('id').single();
-          if (opp) await this.runScreeningPipeline(teamId, opp.id, pipelineMode);
+          // Discovery only inserts — screening is a separate task created by dispatch loop
         }
       } catch (e) {
         console.log(`[lever] Slug "${slug}" error — skipping: ${(e as Error).message.slice(0, 80)}`);
@@ -416,7 +416,8 @@ export class PipelineOrchestrator {
           source_platform_id: platform.id as string, external_ref: job.external_ref,
           source_freshness: 'new',
         }).select('id').single();
-      if (opp) { await this.runScreeningPipeline(teamId, opp.id, pipelineMode); created++; }
+      if (opp) created++;
+      // Discovery only inserts — screening is a separate task created by dispatch loop
     }
     await this.emitEvent(teamId, 'platform_search_completed', `岗位研究员在 LinkedIn 搜索「${searchTerms[0]}」等，发现 ${created} 个新岗位`);
   }
@@ -477,8 +478,7 @@ export class PipelineOrchestrator {
         .select('id')
         .single();
 
-      // Passthrough pipeline: screen → submit directly (no materials)
-      if (opp) await this.runScreeningPipeline(teamId, opp.id, pipelineMode);
+      // Discovery only inserts — screening is a separate task created by dispatch loop
     }
     const platformZh = platformCode === 'zhaopin' ? '智联招聘' : platformCode === 'lagou' ? '拉勾' : '猎聘';
     await this.emitEvent(teamId, 'platform_search_completed', `岗位研究员在${platformZh}搜索「${keywordList[0]}」等，发现 ${jobs.length} 个岗位`);
@@ -534,8 +534,7 @@ export class PipelineOrchestrator {
         .select('id')
         .single();
 
-      // Boss pipeline: screen → greeting (not submit)
-      if (opp) await this.runBossScreeningPipeline(teamId, opp.id, platform.id as string);
+      // Discovery only inserts — screening is a separate task created by dispatch loop
     }
     await this.emitEvent(teamId, 'platform_search_completed', `岗位研究员在 Boss直聘 搜索「${keywordList[0]}」等，发现 ${jobs.length} 个岗位`);
   }
@@ -749,15 +748,8 @@ export class PipelineOrchestrator {
         })
         .eq('id', opportunityId);
 
-      // If advance → continue to materials or submission
-      if (rec.recommendation === 'advance') {
-        if (pipelineMode === PipelineMode.FullTailored) {
-          await this.runMaterialPipeline(teamId, opportunityId, baseline, opp, fitResult.output);
-        } else {
-          // Passthrough: skip materials, go straight to submission
-          await this.runSubmission(teamId, opportunityId, opp);
-        }
-      }
+      // Screening only evaluates — material generation and submission are separate tasks
+      // created by the dispatch loop decision tree based on stage/recommendation.
     }
 
     // Create timeline event
@@ -890,9 +882,8 @@ export class PipelineOrchestrator {
     }
 
     await this.transitionOpportunityStage(opportunityId, OpportunityStage.Prioritized, OpportunityStage.MaterialReady);
-
-    // Proceed to submission
-    await this.runSubmission(teamId, opportunityId, opportunity);
+    // Material pipeline only generates materials — submission is a separate task
+    // created by the dispatch loop decision tree.
   }
 
   /**

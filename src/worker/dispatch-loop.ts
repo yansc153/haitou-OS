@@ -1,26 +1,17 @@
 /**
- * Dispatch Loop — The brain of the 7×24 orchestration engine
+ * Dispatch Loop — The brain of the 7x24 orchestration engine
  *
- * This is the core loop that drives ALL 7 agents continuously.
- * It doesn't just dispatch existing tasks — it CREATES work by running sweeps.
+ * Replaced sweep-based approach with a decision tree (causal chain).
+ * Each heartbeat: evaluate team state -> create the ONE highest-priority task needed.
  *
- * Per BACKEND_API_AND_ARCHITECTURE_SPEC.md § Module 2:
- *
- * Loop A (Opportunity Generation) — continuous when team active:
- *   - Discovery sweep: find new jobs (every 60 min)
- *   - Screening: auto-triggered during discovery
- *   - Material generation: auto-triggered on "advance" recommendation
- *   - Submission: auto-triggered when materials ready
- *
- * Loop B (Opportunity Progression) — when conversations/follow-ups exist:
- *   - Reply poll: check for recruiter replies (every 15 min)
- *   - Follow-up sweep: send follow-ups for stale conversations (every 15 min)
- *   - Handoff detection: triggered during reply processing
- *
- * Scheduling:
- *   - Main cycle: every 10s (dispatch queued tasks + run sweeps)
- *   - Stale task sweep: every 5 min
- *   - Billing enforcement: every 1 min
+ * Gate 1: ability_model exists?     -> No -> assign analyze_resume
+ * Gate 2: search_keywords populated? -> No -> assign generate_keywords
+ * Gate 3: last discovery > 5 min?   -> Yes -> assign opportunity_discovery
+ * Gate 4: discovered opportunities?  -> Yes -> assign screening
+ * Gate 5: advance + no materials?   -> Yes -> assign material_generation
+ * Gate 6: material_ready or passthrough? -> Yes -> assign submission
+ * Gate 7: Boss advance?             -> Yes -> assign first_contact
+ * Gate 8: active conversations?     -> Yes -> assign reply_processing / follow_up
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -28,17 +19,15 @@ import { TaskExecutor } from './task-executor.js';
 import type { BillingService } from './services/billing.js';
 
 // Production intervals
-const DISPATCH_INTERVAL_MS = 30_000;               // 30s — faster first response
+const DISPATCH_INTERVAL_MS = 30_000;               // 30s
 const SWEEP_STALE_INTERVAL_MS = 5 * 60_000;       // 5 min
 const SWEEP_BILLING_INTERVAL_MS = 60_000;          // 60s
 const HEARTBEAT_INTERVAL_MS = 5 * 60_000;          // 5 min
 const MAX_CONCURRENT_TASKS_PER_TEAM = 3;
 
-// Sweep intervals — production
-const DISCOVERY_INTERVAL_MS = 5 * 60_000;           // 5 min (temp: was 60 min)
-const REPLY_POLL_INTERVAL_MS = 15 * 60_000;        // 15 min
-const FOLLOWUP_SWEEP_INTERVAL_MS = 15 * 60_000;    // 15 min
-const RESCREEN_INTERVAL_MS = 10 * 60_000;           // 10 min
+// Decision tree intervals
+const DISCOVERY_INTERVAL_MS = 5 * 60_000;           // 5 min
+const FOLLOWUP_STALE_DAYS = 3;
 
 export class DispatchLoop {
   private running = false;
@@ -57,7 +46,7 @@ export class DispatchLoop {
 
   start() {
     this.running = true;
-    console.log('[dispatch] Starting dispatch loop — 7×24 orchestration active');
+    console.log('[dispatch] Starting dispatch loop — decision tree active');
 
     this.dispatchTimer = setInterval(() => this.cycle(), DISPATCH_INTERVAL_MS);
     this.staleSweepTimer = setInterval(() => this.sweepStaleTasks(), SWEEP_STALE_INTERVAL_MS);
@@ -92,8 +81,19 @@ export class DispatchLoop {
       if (!teams || teams.length === 0) return;
 
       for (const team of teams) {
-        // Phase 1: Create work (sweeps)
-        await this.runSweepsForTeam(team.id);
+        // Get agent instances for this team
+        const { data: agents } = await this.db
+          .from('agent_instance')
+          .select('id, template_role_code')
+          .eq('team_id', team.id);
+
+        if (!agents || agents.length === 0) continue;
+
+        const agentMap = new Map(agents.map(a => [a.template_role_code, a.id]));
+
+        // Phase 1: Decision tree — create the next needed task
+        await this.decideNextAction(team.id, agentMap);
+
         // Phase 2: Dispatch queued tasks
         await this.dispatchForTeam(team.id);
       }
@@ -102,279 +102,222 @@ export class DispatchLoop {
     }
   }
 
-  // ══════════════════════════════════════════════════════════
-  //  SWEEPS — Create work for all 7 agents
-  // ══════════════════════════════════════════════════════════
+  // ================================================================
+  //  DECISION TREE — Replace all sweeps with causal-chain gates
+  // ================================================================
 
-  private async runSweepsForTeam(teamId: string) {
-    // Get agent instances for this team (cached per cycle)
-    const { data: agents } = await this.db
-      .from('agent_instance')
-      .select('id, template_role_code')
-      .eq('team_id', teamId);
+  private async decideNextAction(teamId: string, agentMap: Map<string, string>): Promise<void> {
+    const baseline = await this.getBaseline(teamId);
 
-    if (!agents || agents.length === 0) return;
-
-    const agentMap = new Map(agents.map(a => [a.template_role_code, a.id]));
-
-    // ── Pre-loop: Keyword generation (blocks discovery if missing) ──
-    await this.sweepKeywordGeneration(teamId, agentMap);
-
-    // ── Loop A: Opportunity Generation ──
-    await this.sweepDiscovery(teamId, agentMap);
-    await this.sweepUnscreenedOpportunities(teamId, agentMap);
-    await this.sweepPrioritizedForMaterials(teamId, agentMap);
-    await this.sweepMaterialReadyForSubmission(teamId, agentMap);
-
-    // ── Loop B: Opportunity Progression ──
-    await this.sweepReplyPolling(teamId, agentMap);
-    await this.sweepFollowUps(teamId, agentMap);
-  }
-
-  /**
-   * Sweep: Keyword Generation — 履历分析师
-   * Checks if profile_baseline.search_keywords is null → creates keyword_generation task.
-   * This MUST run before discovery — discovery depends on keywords.
-   */
-  private async sweepKeywordGeneration(teamId: string, agentMap: Map<string, string>) {
-    // Check if keywords already exist
-    const { data: baseline } = await this.db
-      .from('profile_baseline')
-      .select('search_keywords')
-      .eq('team_id', teamId)
-      .order('version', { ascending: false })
-      .limit(1)
-      .single();
-
-    // Check if keywords are actually populated (not just truthy — empty objects/arrays don't count)
-    const kw = baseline?.search_keywords as Record<string, unknown> | null;
-    if (kw) {
-      const en = (kw.en_keywords as string[]) || [];
-      const zh = (kw.zh_keywords as string[]) || [];
-      const companies = (kw.target_companies as string[]) || [];
-      if (en.length > 0 || zh.length > 0 || companies.length > 0) return; // Actually has keywords
-      // Keywords exist but are all empty — force regeneration by setting to null
-      await this.db.from('profile_baseline').update({ search_keywords: null }).eq('team_id', teamId);
-      console.log(`[sweep] search_keywords was empty object, reset to null for regeneration`);
+    // Gate 1: Ability model
+    if (!baseline?.ability_model) {
+      if (await this.noActiveTask(teamId, 'analyze_resume')) {
+        const agentId = agentMap.get('profile_intelligence') || agentMap.get('orchestrator');
+        if (agentId) {
+          await this.createTask(teamId, agentId, 'analyze_resume', 'opportunity_generation', 'critical',
+            `analyze_resume:${teamId}:${Date.now()}`);
+          console.log(`[decide] Gate 1: 履历分析师 -> analyze_resume for team ${teamId}`);
+        }
+        return;
+      }
+      return; // Wait for analyze_resume to complete
     }
 
-    // Check if keyword_generation task already pending/running
-    const { count } = await this.db
-      .from('agent_task')
-      .select('id', { count: 'exact', head: true })
-      .eq('team_id', teamId)
-      .eq('task_type', 'keyword_generation')
-      .in('status', ['queued', 'running']);
+    // Gate 2: Keywords
+    const kw = baseline.search_keywords as Record<string, unknown> | null;
+    const hasKeywords = kw &&
+      (((kw.en_keywords as string[]) || []).length > 0 ||
+       ((kw.zh_keywords as string[]) || []).length > 0 ||
+       ((kw.target_companies as string[]) || []).length > 0);
 
-    if (count && count > 0) return; // Already in progress
+    if (!hasKeywords) {
+      if (await this.noActiveTask(teamId, 'generate_keywords')) {
+        // Also check legacy task type
+        if (await this.noActiveTask(teamId, 'keyword_generation')) {
+          const agentId = agentMap.get('opportunity_research') || agentMap.get('orchestrator');
+          if (agentId) {
+            await this.createTask(teamId, agentId, 'generate_keywords', 'opportunity_generation', 'critical',
+              `generate_keywords:${teamId}:${Date.now()}`, undefined, undefined,
+              { ability_model: baseline.ability_model });
+            console.log(`[decide] Gate 2: 岗位研究员 -> generate_keywords for team ${teamId}`);
+          }
+          return;
+        }
+      }
+      return; // Wait for generate_keywords to complete
+    }
 
-    const agentId = agentMap.get('profile_intelligence') || agentMap.get('orchestrator');
-    if (!agentId) return;
-
-    await this.createTask(teamId, agentId, 'keyword_generation', 'opportunity_generation', 'critical',
-      `keyword_gen:${teamId}:${Date.now()}`);
-    console.log(`[sweep] 履历分析师 → keyword_generation task created for team ${teamId}`);
-  }
-
-  /**
-   * Sweep: Discovery —岗位研究员 every hour
-   */
-  private async sweepDiscovery(teamId: string, agentMap: Map<string, string>) {
-    // M1 fix: Pre-check keywords exist before queuing discovery
-    const { data: bl } = await this.db.from('profile_baseline')
-      .select('search_keywords').eq('team_id', teamId).order('version', { ascending: false }).limit(1).single();
-    const kwCheck = bl?.search_keywords as Record<string, unknown> | null;
-    if (!kwCheck) return; // No keywords yet — wait for keyword_generation
-    const enKw = (kwCheck.en_keywords as string[]) || [];
-    const zhKw = (kwCheck.zh_keywords as string[]) || [];
-    const companies = (kwCheck.target_companies as string[]) || [];
-    if (enKw.length === 0 && zhKw.length === 0 && companies.length === 0) return; // Empty keywords
-
+    // Gate 3: Discovery (every DISCOVERY_INTERVAL_MS)
     const since = new Date(Date.now() - DISCOVERY_INTERVAL_MS).toISOString();
-    const { count } = await this.db
+    const { count: recentDiscovery } = await this.db
       .from('agent_task')
       .select('id', { count: 'exact', head: true })
       .eq('team_id', teamId)
       .eq('task_type', 'opportunity_discovery')
       .gte('created_at', since);
 
-    if (count && count > 0) return;
+    if (!recentDiscovery || recentDiscovery === 0) {
+      if (await this.noActiveTask(teamId, 'opportunity_discovery')) {
+        const agentId = agentMap.get('opportunity_research') || agentMap.get('orchestrator');
+        if (agentId) {
+          await this.createTask(teamId, agentId, 'opportunity_discovery', 'opportunity_generation', 'medium',
+            `discovery:${teamId}:${Date.now()}`);
+          console.log(`[decide] Gate 3: 岗位研究员 -> discovery for team ${teamId}`);
+        }
+        return;
+      }
+    }
 
-    // Discovery is owned by 岗位研究员 (opportunity_research)
-    const agentId = agentMap.get('opportunity_research') || agentMap.get('orchestrator');
-    if (!agentId) return;
-
-    await this.createTask(teamId, agentId, 'opportunity_discovery', 'opportunity_generation', 'medium',
-      `discovery:${teamId}:${Date.now()}`);
-    console.log(`[sweep] 岗位研究员 → discovery task created for team ${teamId}`);
-  }
-
-  /**
-   * Sweep: Re-screen opportunities stuck in "discovered" stage
-   * (Failed screening from previous runs)
-   */
-  private async sweepUnscreenedOpportunities(teamId: string, agentMap: Map<string, string>) {
-    const since = new Date(Date.now() - RESCREEN_INTERVAL_MS).toISOString();
-
-    // Check if we already have a screening task recently
-    const { count: recentScreening } = await this.db
-      .from('agent_task')
-      .select('id', { count: 'exact', head: true })
-      .eq('team_id', teamId)
-      .eq('task_type', 'screening')
-      .gte('created_at', since);
-
-    if (recentScreening && recentScreening > 0) return;
-
-    // Check for opportunities stuck in discovered
+    // Gate 4: Screening (discovered opportunities waiting)
     const { count: unscreened } = await this.db
       .from('opportunity')
       .select('id', { count: 'exact', head: true })
       .eq('team_id', teamId)
       .eq('stage', 'discovered');
 
-    if (!unscreened || unscreened === 0) return;
+    if (unscreened && unscreened > 0) {
+      if (await this.noActiveTask(teamId, 'screening')) {
+        const agentId = agentMap.get('matching_review');
+        if (agentId) {
+          await this.createTask(teamId, agentId, 'screening', 'opportunity_generation', 'medium',
+            `screening:${teamId}:${Date.now()}`);
+          console.log(`[decide] Gate 4: 匹配审核员 -> screening ${unscreened} opps for team ${teamId}`);
+        }
+        return;
+      }
+    }
 
-    const agentId = agentMap.get('matching_review');
-    if (!agentId) return;
-
-    await this.createTask(teamId, agentId, 'screening', 'opportunity_generation', 'medium',
-      `screening-sweep:${teamId}:${Date.now()}`);
-    console.log(`[sweep] 匹配审核员 → screening sweep for ${unscreened} unscreened opps`);
-  }
-
-  /**
-   * Sweep: Material Generation — 简历顾问 generates materials for prioritized opportunities
-   * Catches opportunities stuck at "prioritized" with recommendation "advance" but no materials
-   */
-  private async sweepPrioritizedForMaterials(teamId: string, agentMap: Map<string, string>) {
-    // Find prioritized opps with "advance" recommendation that have no materials yet
-    const { data: stuck } = await this.db
+    // Gate 5: Material generation (advance + full_tailored + no materials)
+    const { data: advanceOpps } = await this.db
       .from('opportunity')
-      .select('id')
+      .select('id, source_platform_id')
       .eq('team_id', teamId)
       .eq('stage', 'prioritized')
       .eq('recommendation', 'advance')
       .limit(5);
 
-    if (!stuck || stuck.length === 0) return;
+    if (advanceOpps && advanceOpps.length > 0) {
+      for (const opp of advanceOpps) {
+        // Check pipeline mode: only full_tailored needs materials
+        const { data: plat } = await this.db
+          .from('platform_definition')
+          .select('pipeline_mode, code')
+          .eq('id', opp.source_platform_id)
+          .single();
 
-    // Filter out those that already have materials
-    for (const opp of stuck) {
-      const { count: materialCount } = await this.db
-        .from('material')
-        .select('id', { count: 'exact', head: true })
-        .eq('opportunity_id', opp.id);
+        // Passthrough platforms (Chinese) and Boss skip materials
+        if (plat?.pipeline_mode === 'passthrough' || plat?.code === 'boss_zhipin') continue;
 
-      if (materialCount && materialCount > 0) continue;
+        // Check no materials exist
+        const { count: materialCount } = await this.db
+          .from('material')
+          .select('id', { count: 'exact', head: true })
+          .eq('opportunity_id', opp.id);
+        if (materialCount && materialCount > 0) continue;
 
-      // Check no pending/running material_generation task exists
-      const { count: existingTask } = await this.db
-        .from('agent_task')
-        .select('id', { count: 'exact', head: true })
-        .eq('team_id', teamId)
-        .eq('task_type', 'material_generation')
-        .eq('related_entity_id', opp.id)
-        .in('status', ['queued', 'running']);
-
-      if (existingTask && existingTask > 0) continue;
-
-      const agentId = agentMap.get('materials_advisor') || agentMap.get('orchestrator');
-      if (!agentId) return;
-
-      await this.createTask(teamId, agentId, 'material_generation', 'opportunity_generation', 'medium',
-        `material:${opp.id}:${Date.now()}`, opp.id, 'opportunity');
-      console.log(`[sweep] 简历顾问 → material_generation for opp ${opp.id}`);
+        // Check no pending task
+        if (await this.noActiveTaskForEntity(teamId, 'material_generation', opp.id)) {
+          const agentId = agentMap.get('materials_advisor') || agentMap.get('orchestrator');
+          if (agentId) {
+            await this.createTask(teamId, agentId, 'material_generation', 'opportunity_generation', 'medium',
+              `material:${opp.id}:${Date.now()}`, opp.id, 'opportunity');
+            console.log(`[decide] Gate 5: 简历顾问 -> material_generation for opp ${opp.id}`);
+          }
+          return;
+        }
+      }
     }
-  }
 
-  /**
-   * Sweep: Submission — 投递专员 submits applications for material_ready opportunities
-   * Catches opportunities at "material_ready" with no submission attempt
-   */
-  private async sweepMaterialReadyForSubmission(teamId: string, agentMap: Map<string, string>) {
-    const { data: ready } = await this.db
+    // Gate 6: Submission (material_ready OR passthrough advance)
+    const { data: readyOpps } = await this.db
       .from('opportunity')
       .select('id')
       .eq('team_id', teamId)
       .eq('stage', 'material_ready')
       .limit(5);
 
-    if (!ready || ready.length === 0) return;
-
-    for (const opp of ready) {
-      // Check no pending/running submission task exists
-      const { count: existingTask } = await this.db
-        .from('agent_task')
-        .select('id', { count: 'exact', head: true })
-        .eq('team_id', teamId)
-        .eq('task_type', 'submission')
-        .eq('related_entity_id', opp.id)
-        .in('status', ['queued', 'running']);
-
-      if (existingTask && existingTask > 0) continue;
-
-      const agentId = agentMap.get('application_executor') || agentMap.get('orchestrator');
-      if (!agentId) return;
-
-      await this.createTask(teamId, agentId, 'submission', 'opportunity_generation', 'high',
-        `submission:${opp.id}:${Date.now()}`, opp.id, 'opportunity');
-      console.log(`[sweep] 投递专员 → submission for opp ${opp.id}`);
+    if (readyOpps && readyOpps.length > 0) {
+      for (const opp of readyOpps) {
+        if (await this.noActiveTaskForEntity(teamId, 'submission', opp.id)) {
+          const agentId = agentMap.get('application_executor') || agentMap.get('orchestrator');
+          if (agentId) {
+            await this.createTask(teamId, agentId, 'submission', 'opportunity_generation', 'high',
+              `submission:${opp.id}:${Date.now()}`, opp.id, 'opportunity');
+            console.log(`[decide] Gate 6: 投递专员 -> submission for opp ${opp.id}`);
+          }
+          return;
+        }
+      }
     }
-  }
 
-  /**
-   * Sweep: Reply Polling — 招聘关系经理 checks for recruiter replies
-   * Only runs if there are opportunities in contact_started or followup_active stage
-   */
-  private async sweepReplyPolling(teamId: string, agentMap: Map<string, string>) {
-    const since = new Date(Date.now() - REPLY_POLL_INTERVAL_MS).toISOString();
+    // Also handle passthrough submissions: prioritized + advance + passthrough platform
+    if (advanceOpps && advanceOpps.length > 0) {
+      for (const opp of advanceOpps) {
+        const { data: plat } = await this.db
+          .from('platform_definition')
+          .select('pipeline_mode, code')
+          .eq('id', opp.source_platform_id)
+          .single();
 
-    // Already have a recent poll task?
-    const { count: recentPoll } = await this.db
-      .from('agent_task')
-      .select('id', { count: 'exact', head: true })
-      .eq('team_id', teamId)
-      .eq('task_type', 'reply_processing')
-      .gte('created_at', since);
+        // Only passthrough non-Boss platforms
+        if (plat?.pipeline_mode !== 'passthrough' || plat?.code === 'boss_zhipin') continue;
 
-    if (recentPoll && recentPoll > 0) return;
+        if (await this.noActiveTaskForEntity(teamId, 'submission', opp.id)) {
+          const agentId = agentMap.get('application_executor') || agentMap.get('orchestrator');
+          if (agentId) {
+            await this.createTask(teamId, agentId, 'submission', 'opportunity_generation', 'high',
+              `submission:${opp.id}:${Date.now()}`, opp.id, 'opportunity');
+            console.log(`[decide] Gate 6b: 投递专员 -> passthrough submission for opp ${opp.id}`);
+          }
+          return;
+        }
+      }
+    }
 
-    // Any opportunities in conversation stages?
+    // Gate 7: First contact (Boss advance)
+    if (advanceOpps && advanceOpps.length > 0) {
+      for (const opp of advanceOpps) {
+        const { data: plat } = await this.db
+          .from('platform_definition')
+          .select('code')
+          .eq('id', opp.source_platform_id)
+          .single();
+
+        if (plat?.code !== 'boss_zhipin') continue;
+
+        if (await this.noActiveTaskForEntity(teamId, 'first_contact', opp.id)) {
+          const agentId = agentMap.get('application_executor') || agentMap.get('orchestrator');
+          if (agentId) {
+            await this.createTask(teamId, agentId, 'first_contact', 'opportunity_generation', 'high',
+              `first_contact:${opp.id}:${Date.now()}`, opp.id, 'opportunity');
+            console.log(`[decide] Gate 7: 投递专员 -> first_contact (Boss) for opp ${opp.id}`);
+          }
+          return;
+        }
+      }
+    }
+
+    // Gate 8: Reply processing + follow-ups
     const { count: activeConversations } = await this.db
       .from('opportunity')
       .select('id', { count: 'exact', head: true })
       .eq('team_id', teamId)
       .in('stage', ['contact_started', 'followup_active', 'positive_progression']);
 
-    if (!activeConversations || activeConversations === 0) return;
+    if (activeConversations && activeConversations > 0) {
+      if (await this.noActiveTask(teamId, 'reply_processing')) {
+        const agentId = agentMap.get('relationship_manager');
+        if (agentId) {
+          await this.createTask(teamId, agentId, 'reply_processing', 'opportunity_progression', 'high',
+            `reply-poll:${teamId}:${Date.now()}`);
+          console.log(`[decide] Gate 8: 招聘关系经理 -> reply_processing for ${activeConversations} conversations`);
+          return;
+        }
+      }
+    }
 
-    const agentId = agentMap.get('relationship_manager');
-    if (!agentId) return;
-
-    await this.createTask(teamId, agentId, 'reply_processing', 'opportunity_progression', 'high',
-      `reply-poll:${teamId}:${Date.now()}`);
-    console.log(`[sweep] 招聘关系经理 → reply poll for ${activeConversations} active conversations`);
-  }
-
-  /**
-   * Sweep: Follow-ups — 招聘关系经理 sends follow-up messages
-   * Triggers when submitted opportunities haven't had activity for 3+ days
-   */
-  private async sweepFollowUps(teamId: string, agentMap: Map<string, string>) {
-    const since = new Date(Date.now() - FOLLOWUP_SWEEP_INTERVAL_MS).toISOString();
-
-    const { count: recentFollowup } = await this.db
-      .from('agent_task')
-      .select('id', { count: 'exact', head: true })
-      .eq('team_id', teamId)
-      .eq('task_type', 'follow_up')
-      .gte('created_at', since);
-
-    if (recentFollowup && recentFollowup > 0) return;
-
-    // Find submitted opportunities with no activity for 3+ days
-    const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60_000).toISOString();
+    // Follow-ups: submitted opportunities with no activity for 3+ days
+    const threeDaysAgo = new Date(Date.now() - FOLLOWUP_STALE_DAYS * 24 * 60 * 60_000).toISOString();
     const { count: staleSubmissions } = await this.db
       .from('opportunity')
       .select('id', { count: 'exact', head: true })
@@ -382,19 +325,22 @@ export class DispatchLoop {
       .in('stage', ['submitted', 'contact_started'])
       .lt('stage_changed_at', threeDaysAgo);
 
-    if (!staleSubmissions || staleSubmissions === 0) return;
-
-    const agentId = agentMap.get('relationship_manager');
-    if (!agentId) return;
-
-    await this.createTask(teamId, agentId, 'follow_up', 'opportunity_progression', 'medium',
-      `followup-sweep:${teamId}:${Date.now()}`);
-    console.log(`[sweep] 招聘关系经理 → follow-up for ${staleSubmissions} stale submissions`);
+    if (staleSubmissions && staleSubmissions > 0) {
+      if (await this.noActiveTask(teamId, 'follow_up')) {
+        const agentId = agentMap.get('relationship_manager');
+        if (agentId) {
+          await this.createTask(teamId, agentId, 'follow_up', 'opportunity_progression', 'medium',
+            `followup:${teamId}:${Date.now()}`);
+          console.log(`[decide] Gate 8b: 招聘关系经理 -> follow_up for ${staleSubmissions} stale submissions`);
+          return;
+        }
+      }
+    }
   }
 
-  // ══════════════════════════════════════════════════════════
-  //  DISPATCH — Execute queued tasks
-  // ══════════════════════════════════════════════════════════
+  // ================================================================
+  //  DISPATCH — Execute queued tasks with atomic checkout
+  // ================================================================
 
   private async dispatchForTeam(teamId: string) {
     const { count: runningCount } = await this.db
@@ -405,9 +351,10 @@ export class DispatchLoop {
 
     if ((runningCount || 0) >= MAX_CONCURRENT_TASKS_PER_TEAM) return;
 
-    // Task-type priority per spec § Priority Algorithm:
-    // handoff > reply > follow-up > submission > material > screening > discovery
+    // Task-type priority per spec
     const TASK_TYPE_PRIORITY: Record<string, number> = {
+      analyze_resume: 9,
+      generate_keywords: 8,
       keyword_generation: 8,
       handoff_takeover: 7,
       reply_processing: 6,
@@ -419,7 +366,7 @@ export class DispatchLoop {
       opportunity_discovery: 1,
     };
 
-    // Fetch queued tasks, skipping those still in backoff (last_retry_at > now)
+    // Fetch queued tasks, skipping those still in backoff
     const now = new Date().toISOString();
     const { data: tasks } = await this.db
       .from('agent_task')
@@ -456,19 +403,65 @@ export class DispatchLoop {
       }
     }
 
-    // Mark running and execute
-    await this.db.from('agent_task')
-      .update({ status: 'running', started_at: new Date().toISOString() })
-      .eq('id', task.id);
+    // Atomic checkout via Postgres RPC (if available), fallback to direct update
+    let checkedOut = false;
+    try {
+      const { data: rpcResult } = await this.db.rpc('checkout_task', { p_task_id: task.id });
+      checkedOut = rpcResult?.[0]?.checked_out === true;
+    } catch {
+      // RPC not yet deployed — fallback to direct update
+      const { error } = await this.db.from('agent_task')
+        .update({ status: 'running', started_at: new Date().toISOString() })
+        .eq('id', task.id)
+        .eq('status', 'queued');
+      checkedOut = !error;
+    }
+
+    if (!checkedOut) return; // Another worker grabbed it
 
     this.executor.execute(task).catch((err) => {
       console.error(`[dispatch] Task ${task.id} execution error:`, err);
     });
   }
 
-  // ══════════════════════════════════════════════════════════
+  // ================================================================
   //  HELPERS
-  // ══════════════════════════════════════════════════════════
+  // ================================================================
+
+  /** Get profile_baseline for a team (latest version) */
+  private async getBaseline(teamId: string): Promise<Record<string, unknown> | null> {
+    const { data } = await this.db
+      .from('profile_baseline')
+      .select('search_keywords, ability_model')
+      .eq('team_id', teamId)
+      .order('version', { ascending: false })
+      .limit(1)
+      .single();
+    return data;
+  }
+
+  /** Check if there are no queued or running tasks of the given type for a team */
+  private async noActiveTask(teamId: string, taskType: string): Promise<boolean> {
+    const { count } = await this.db
+      .from('agent_task')
+      .select('id', { count: 'exact', head: true })
+      .eq('team_id', teamId)
+      .eq('task_type', taskType)
+      .in('status', ['queued', 'running']);
+    return !count || count === 0;
+  }
+
+  /** Check if there are no queued or running tasks of given type for a specific entity */
+  private async noActiveTaskForEntity(teamId: string, taskType: string, entityId: string): Promise<boolean> {
+    const { count } = await this.db
+      .from('agent_task')
+      .select('id', { count: 'exact', head: true })
+      .eq('team_id', teamId)
+      .eq('task_type', taskType)
+      .eq('related_entity_id', entityId)
+      .in('status', ['queued', 'running']);
+    return !count || count === 0;
+  }
 
   private async createTask(
     teamId: string,
@@ -479,6 +472,7 @@ export class DispatchLoop {
     idempotencyKey: string,
     relatedEntityId?: string,
     relatedEntityType?: string,
+    inputData?: Record<string, unknown>,
   ) {
     const { error } = await this.db.from('agent_task').insert({
       team_id: teamId,
@@ -494,6 +488,7 @@ export class DispatchLoop {
       retry_count: 0,
       ...(relatedEntityId && { related_entity_id: relatedEntityId }),
       ...(relatedEntityType && { related_entity_type: relatedEntityType }),
+      ...(inputData && { input_data: inputData }),
     });
     if (error) {
       console.error(`[dispatch] Failed to create ${taskType} task: ${error.message}`);

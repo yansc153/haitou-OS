@@ -31,6 +31,7 @@ type AgentTask = {
   related_entity_type?: string;
   related_entity_id?: string;
   input_summary?: string;
+  input_data?: Record<string, unknown>;
   retry_count: number;
   max_retries: number;
 };
@@ -65,6 +66,11 @@ export class TaskExecutor {
       // Route to appropriate handler based on task_type
       const result = await this.routeTask(task);
 
+      // Quality gate: validate output is non-empty before marking completed
+      if (result.output_data && typeof result.output_data === 'object' && Object.keys(result.output_data).length === 0) {
+        throw new Error(`QUALITY_GATE: task ${task.task_type} produced empty output_data`);
+      }
+
       // Only mark completed if task actually succeeded
       // Submission tasks report outcome in summary — check for failure signals
       const isFailure = result.summary?.includes('hard_failure') || result.summary?.includes('session_expired');
@@ -84,6 +90,7 @@ export class TaskExecutor {
             status: 'completed',
             completed_at: new Date().toISOString(),
             output_summary: result.summary,
+            ...(result.output_data && { output_data: result.output_data }),
           })
           .eq('id', task.id);
       }
@@ -115,10 +122,14 @@ export class TaskExecutor {
     }
   }
 
-  private async routeTask(task: AgentTask): Promise<{ summary: string }> {
+  private async routeTask(task: AgentTask): Promise<{ summary: string; output_data?: Record<string, unknown> }> {
     switch (task.task_type) {
+      case 'analyze_resume':
+        return await this.handleAnalyzeResume(task);
+
+      case 'generate_keywords':
       case 'keyword_generation':
-        return await this.handleKeywordGeneration(task);
+        return await this.handleGenerateKeywords(task);
 
       case 'opportunity_discovery':
         await this.pipeline.runDiscoveryCycle(task.team_id);
@@ -512,17 +523,16 @@ export class TaskExecutor {
   }
 
   /**
-   * Handle keyword generation — the first step in the agent causal chain.
-   * 调度官唤醒履历分析师 → 分析简历 → 产出关键词 → 调度官分配给岗位研究员
+   * Handle analyze_resume — 履历分析师 analyzes resume to produce ability model.
+   * Step 1 of the causal chain: analyze_resume → generate_keywords → discovery
    */
-  private async handleKeywordGeneration(task: AgentTask): Promise<{ summary: string }> {
+  private async handleAnalyzeResume(task: AgentTask): Promise<{ summary: string; output_data?: Record<string, unknown> }> {
     const teamId = task.team_id;
 
-    // 1. 调度官唤醒履历分析师
     await this.insertEvent(teamId, 'agent_online', '调度官已上线，检测到需要分析简历，唤醒履历分析师');
     await this.insertEvent(teamId, 'resume_analysis_started', '履历分析师已上线，开始分析简历...');
 
-    // 2. 读取 profile_baseline
+    // Read profile_baseline
     const { data: baseline } = await this.db
       .from('profile_baseline')
       .select('*')
@@ -532,11 +542,9 @@ export class TaskExecutor {
       .single();
 
     if (!baseline) {
-      await this.insertEvent(teamId, 'resume_analysis_completed', '履历分析师：未找到简历数据，无法生成关键词');
-      throw new Error('KEYWORD_GEN_BLOCKED: No profile_baseline found — cannot generate keywords');
+      throw new Error('ANALYZE_RESUME_BLOCKED: No profile_baseline found — cannot analyze resume');
     }
 
-    // 3. 调用 keyword-generation skill
     const skillInput = {
       profile_baseline: {
         experiences: baseline.experiences,
@@ -554,11 +562,129 @@ export class TaskExecutor {
       },
     };
 
+    const result = await executeSkill('analyze-resume', skillInput);
+
+    if (!result.success) {
+      throw new Error(`ANALYZE_RESUME_FAILED: ${result.error}`);
+    }
+
+    const output = result.output as { ability_model: Record<string, unknown> };
+    if (!output.ability_model || Object.keys(output.ability_model).length === 0) {
+      throw new Error('ANALYZE_RESUME_FAILED: LLM returned empty ability_model');
+    }
+
+    // Write ability_model to profile_baseline
+    await this.db
+      .from('profile_baseline')
+      .update({ ability_model: output.ability_model })
+      .eq('id', baseline.id);
+
+    // Write output_data to agent_task
+    await this.db
+      .from('agent_task')
+      .update({ output_data: output })
+      .eq('id', task.id);
+
+    await this.insertEvent(teamId, 'resume_analysis_completed',
+      `履历分析师完成能力分析 — 识别出 ${(output.ability_model as Record<string, unknown>).core_skills ? ((output.ability_model as Record<string, unknown>).core_skills as string[]).length : 0} 项核心技能`);
+
+    if (result.tokens_used) {
+      const { recordTokenUsage } = await import('./pipeline.js');
+      await recordTokenUsage(this.db, teamId, result.tokens_used.input, result.tokens_used.output);
+    }
+
+    return {
+      summary: '履历分析师完成能力分析',
+      output_data: output,
+    };
+  }
+
+  /**
+   * Handle generate_keywords — 岗位研究员 generates search keywords from ability model.
+   * Step 2 of the causal chain: analyze_resume → generate_keywords → discovery
+   * Also handles legacy 'keyword_generation' task type for backward compatibility.
+   */
+  private async handleGenerateKeywords(task: AgentTask): Promise<{ summary: string; output_data?: Record<string, unknown> }> {
+    const teamId = task.team_id;
+
+    // Read ability_model from task input_data (preferred) or profile_baseline
+    let abilityModel: Record<string, unknown> | null = null;
+    if (task.input_data?.ability_model) {
+      abilityModel = task.input_data.ability_model as Record<string, unknown>;
+    }
+
+    const { data: baseline } = await this.db
+      .from('profile_baseline')
+      .select('*')
+      .eq('team_id', teamId)
+      .order('version', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (!baseline) {
+      throw new Error('KEYWORD_GEN_BLOCKED: No profile_baseline found — cannot generate keywords');
+    }
+
+    if (!abilityModel && baseline.ability_model) {
+      abilityModel = baseline.ability_model as Record<string, unknown>;
+    }
+
+    // If no ability_model at all, fall back to running analyze-resume inline (legacy compat)
+    if (!abilityModel) {
+      console.log('[executor] No ability_model found, running inline analyze-resume for backward compat');
+      const analyzeResult = await executeSkill('analyze-resume', {
+        profile_baseline: {
+          experiences: baseline.experiences,
+          skills: baseline.skills,
+          education: baseline.education,
+          primary_domain: baseline.primary_domain,
+          headline_summary: baseline.headline_summary,
+          capability_tags: baseline.capability_tags,
+          capability_gaps: baseline.capability_gaps,
+          inferred_role_directions: baseline.inferred_role_directions,
+          languages: baseline.languages,
+          certifications: baseline.certifications,
+          seniority_level: baseline.seniority_level,
+          source_language: baseline.source_language,
+        },
+      });
+      if (analyzeResult.success) {
+        abilityModel = (analyzeResult.output as { ability_model: Record<string, unknown> }).ability_model;
+        await this.db.from('profile_baseline').update({ ability_model: abilityModel }).eq('id', baseline.id);
+        if (analyzeResult.tokens_used) {
+          const { recordTokenUsage } = await import('./pipeline.js');
+          await recordTokenUsage(this.db, teamId, analyzeResult.tokens_used.input, analyzeResult.tokens_used.output);
+        }
+      }
+    }
+
+    await this.insertEvent(teamId, 'keyword_generation_started', '岗位研究员已上线，开始生成搜索关键词...');
+
+    // Call keyword-generation skill
+    const skillInput: Record<string, unknown> = {
+      profile_baseline: {
+        experiences: baseline.experiences,
+        skills: baseline.skills,
+        education: baseline.education,
+        primary_domain: baseline.primary_domain,
+        headline_summary: baseline.headline_summary,
+        capability_tags: baseline.capability_tags,
+        capability_gaps: baseline.capability_gaps,
+        inferred_role_directions: baseline.inferred_role_directions,
+        languages: baseline.languages,
+        certifications: baseline.certifications,
+        seniority_level: baseline.seniority_level,
+        source_language: baseline.source_language,
+      },
+    };
+    if (abilityModel) {
+      skillInput.ability_model = abilityModel;
+    }
+
     const result = await executeSkill('keyword-generation', skillInput);
 
     if (!result.success) {
-      // Fallback: use inferred_role_directions for EN only; leave zh_keywords empty
-      // so Chinese platforms skip discovery rather than searching with English terms
+      // Fallback: use inferred_role_directions for EN only
       const directions = baseline.inferred_role_directions as string[] | null;
       const fallbackEn = (directions && directions.length > 0) ? directions : ['software engineer'];
       const fallback = { en_keywords: fallbackEn, zh_keywords: [] as string[], target_companies: [], primary_domain: baseline.primary_domain || 'general', seniority_bracket: baseline.seniority_level || 'mid' };
@@ -568,11 +694,10 @@ export class TaskExecutor {
         .update({ search_keywords: fallback })
         .eq('id', baseline.id);
 
-      await this.insertEvent(teamId, 'resume_analysis_completed', `履历分析师完成分析（降级模式）— 使用推断方向: ${fallbackEn.slice(0, 3).join(', ')}`);
-      return { summary: `关键词生成（降级）: ${fallbackEn.length} 个方向` };
+      await this.insertEvent(teamId, 'keyword_generated', `关键词生成（降级模式）— 使用推断方向: ${fallbackEn.slice(0, 3).join(', ')}`);
+      return { summary: `关键词生成（降级）: ${fallbackEn.length} 个方向`, output_data: fallback };
     }
 
-    // 4. 写入 profile_baseline.search_keywords
     const output = result.output as {
       en_keywords: string[];
       zh_keywords: string[];
@@ -582,44 +707,52 @@ export class TaskExecutor {
       reasoning: string;
     };
 
-    // Validate keywords are not empty before saving (prevents permanent deadlock H4)
+    // Validate keywords are not empty (prevents permanent deadlock)
     if ((!output.en_keywords || output.en_keywords.length === 0) &&
         (!output.zh_keywords || output.zh_keywords.length === 0) &&
         (!output.target_companies || output.target_companies.length === 0)) {
-      // LLM returned empty — use fallback instead
       const directions = baseline.inferred_role_directions as string[] | null;
       output.en_keywords = (directions && directions.length > 0) ? directions : ['software engineer'];
       output.target_companies = [];
       output.zh_keywords = [];
     }
 
+    // Write to profile_baseline.search_keywords AND agent_task.output_data
     await this.db
       .from('profile_baseline')
       .update({ search_keywords: output })
       .eq('id', baseline.id);
 
-    // 5. 插入因果链事件
+    await this.db
+      .from('agent_task')
+      .update({ output_data: output })
+      .eq('id', task.id);
+
+    // Timeline events with keyword counts
+    const enCount = output.en_keywords.length;
+    const zhCount = output.zh_keywords.length;
+    const companyCount = output.target_companies.length;
     const enPreview = output.en_keywords.slice(0, 3).join(', ');
     const zhPreview = output.zh_keywords.slice(0, 3).join('、');
     const companyPreview = output.target_companies.slice(0, 3).join(', ');
 
-    await this.insertEvent(teamId, 'resume_analysis_completed',
-      `履历分析师完成分析 — 识别出 ${output.en_keywords.length + output.zh_keywords.length} 个搜索方向，领域: ${output.primary_domain}，级别: ${output.seniority_bracket}`);
-
     await this.insertEvent(teamId, 'keyword_generated',
-      `生成搜索关键词:\n英文: ${enPreview}...\n中文: ${zhPreview}...\n目标公司: ${companyPreview}...`);
+      `生成搜索关键词: ${enCount} 英文, ${zhCount} 中文, ${companyCount} 目标公司\n英文: ${enPreview}...\n中文: ${zhPreview}...\n目标公司: ${companyPreview}...`);
 
     await this.insertEvent(teamId, 'task_assigned',
-      `调度官将 ${output.zh_keywords.length} 个中文关键词分配给岗位研究员（智联/拉勾/猎聘/Boss）`);
+      `调度官将 ${zhCount} 个中文关键词分配给岗位研究员（智联/拉勾/猎聘/Boss）`);
     await this.insertEvent(teamId, 'task_assigned',
-      `调度官将 ${output.en_keywords.length} 个英文关键词 + ${output.target_companies.length} 个目标公司分配给岗位研究员（LinkedIn/Greenhouse/Lever）`);
+      `调度官将 ${enCount} 个英文关键词 + ${companyCount} 个目标公司分配给岗位研究员（LinkedIn/Greenhouse/Lever）`);
 
     if (result.tokens_used) {
       const { recordTokenUsage } = await import('./pipeline.js');
       await recordTokenUsage(this.db, teamId, result.tokens_used.input, result.tokens_used.output);
     }
 
-    return { summary: `关键词生成完成: ${output.en_keywords.length} 英文 + ${output.zh_keywords.length} 中文 + ${output.target_companies.length} 公司` };
+    return {
+      summary: `关键词生成完成: ${enCount} 英文 + ${zhCount} 中文 + ${companyCount} 公司`,
+      output_data: output as unknown as Record<string, unknown>,
+    };
   }
 
   private async insertEvent(teamId: string, eventType: string, summaryText: string): Promise<void> {

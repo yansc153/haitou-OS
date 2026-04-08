@@ -358,9 +358,25 @@ IMPORTANT: Respond IMMEDIATELY with JSON. Do NOT use <think> tags or reasoning b
     try {
       const { default: postgres } = await import('https://deno.land/x/postgresjs@v3.4.4/mod.js');
       const sql = postgres(dbUrl, { max: 1 });
+
+      // Pipeline refactor migrations
       await sql`ALTER TABLE profile_baseline ADD COLUMN IF NOT EXISTS search_keywords jsonb DEFAULT NULL`;
+      await sql`ALTER TABLE agent_task ADD COLUMN IF NOT EXISTS input_data jsonb DEFAULT NULL`;
+      await sql`ALTER TABLE agent_task ADD COLUMN IF NOT EXISTS output_data jsonb DEFAULT NULL`;
+      await sql`ALTER TABLE profile_baseline ADD COLUMN IF NOT EXISTS ability_model jsonb DEFAULT NULL`;
+      await sql`
+        CREATE OR REPLACE FUNCTION checkout_task(p_task_id uuid)
+        RETURNS TABLE(checked_out boolean) AS $fn$
+        BEGIN
+          UPDATE agent_task SET status = 'running', started_at = now()
+          WHERE id = p_task_id AND status = 'queued';
+          RETURN QUERY SELECT (FOUND)::boolean AS checked_out;
+        END;
+        $fn$ LANGUAGE plpgsql
+      `;
+
       await sql.end();
-      return ok({ message: 'Migration complete: search_keywords column added' });
+      return ok({ message: 'Migration complete: search_keywords + input_data + output_data + ability_model + checkout_task RPC' });
     } catch (e) {
       return err(500, 'MIGRATION_FAILED', (e as Error).message);
     }

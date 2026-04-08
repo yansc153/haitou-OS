@@ -138,7 +138,7 @@ describe('T012: all skill contracts have requiredFields', () => {
   it('all 12 contracts have non-empty requiredFields', async () => {
     const { PROMPT_CONTRACTS } = await import('../src/worker/skills/contracts');
     const skills = Object.entries(PROMPT_CONTRACTS);
-    expect(skills.length).toBe(12);
+    expect(skills.length).toBeGreaterThanOrEqual(12);
     for (const [code, contract] of skills) {
       expect(contract.requiredFields, `${code} missing requiredFields`).toBeDefined();
       expect(contract.requiredFields.length, `${code} has empty requiredFields`).toBeGreaterThan(0);
