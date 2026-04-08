@@ -201,8 +201,24 @@ serve(async (req) => {
         }
       }
     } catch (parseErr) {
-      // Parsing failed — continue with minimal profile (worker will retry later)
-      console.warn('[onboarding-complete] Resume parsing failed:', (parseErr as Error).message);
+      const msg = (parseErr as Error).message;
+      console.warn('[onboarding-complete] Resume parsing failed:', msg);
+      if (mode === 'activate') {
+        // For activation, we need SOME profile data. If parsing totally fails,
+        // create minimal profile from user metadata so team can still start.
+        // Worker keyword_generation will use fallback keywords.
+        parsedProfileData = {
+          full_name: user!.user_metadata?.full_name || null,
+          contact_email: user!.email || null,
+          skills: [],
+          experiences: [],
+          education: [],
+          inferred_role_directions: [],
+          source_language: 'en',
+          parse_confidence: 'low',
+          _parse_error: msg,
+        };
+      }
     }
   }
 

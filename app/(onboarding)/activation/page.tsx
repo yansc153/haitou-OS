@@ -42,6 +42,7 @@ export default function ActivationPage() {
   const [status, setStatus] = useState('');
   const [activatedIndexes, setActivatedIndexes] = useState<number[]>([]);
   const [draft, setDraft] = useState<DraftSummary | null>(null);
+  const [connectedPlatforms, setConnectedPlatforms] = useState<string[]>([]);
 
   // Fetch draft summary on mount
   useEffect(() => {
@@ -55,13 +56,27 @@ export default function ActivationPage() {
         });
         if (res.ok) {
           const json = await res.json();
-          const answers = json.data?.answers ?? json.answers ?? {};
+          const d = json.data || {};
+          const answers = d.answered_fields || {};
           setDraft({
             target_locations: answers.target_locations,
             strategy_mode: answers.strategy_mode,
             work_mode: answers.work_mode,
-            resume_filename: json.data?.resume_filename ?? json.resume_filename,
+            resume_filename: d.resume_asset_id ? '已上传' : undefined,
           });
+
+          // Fetch connected platforms
+          const pRes = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/platforms-list`, {
+            headers: { Authorization: `Bearer ${session.access_token}` },
+          });
+          if (pRes.ok) {
+            const pJson = await pRes.json();
+            const all = [...(pJson.data?.global_english || []), ...(pJson.data?.china || [])];
+            const connected = all
+              .filter((p: { connection_status: string }) => p.connection_status === 'active')
+              .map((p: { display_name_zh: string; display_name: string }) => p.display_name_zh || p.display_name);
+            setConnectedPlatforms(connected);
+          }
         }
       } catch {
         // Non-blocking — summary is optional
@@ -135,7 +150,7 @@ export default function ActivationPage() {
             const isActivating = activatedIndexes.includes(i);
             return (
               <div key={agent.role_code} className="bg-card rounded-2xl p-6 text-center shadow-sm">
-                {Avatar && <Avatar size={64} />}
+                {Avatar && <div className="flex justify-center"><Avatar size={64} /></div>}
                 <div className="mt-3 font-bold">{agent.title_zh}</div>
                 <div className="text-xs text-muted-foreground uppercase tracking-wider">{agent.persona}</div>
                 <p className="text-xs text-muted-foreground mt-2">{agent.desc}</p>
@@ -171,7 +186,7 @@ export default function ActivationPage() {
             const isActivating = activatedIndexes.includes(globalIdx);
             return (
               <div key={agent.role_code} className="bg-card rounded-2xl p-6 text-center shadow-sm">
-                {Avatar && <Avatar size={64} />}
+                {Avatar && <div className="flex justify-center"><Avatar size={64} /></div>}
                 <div className="mt-3 font-bold">{agent.title_zh}</div>
                 <div className="text-xs text-muted-foreground uppercase tracking-wider">{agent.persona}</div>
                 <p className="text-xs text-muted-foreground mt-2">{agent.desc}</p>
@@ -208,26 +223,26 @@ export default function ActivationPage() {
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
             <div>
-              <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Target Cities</div>
+              <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">目标城市</div>
               <div className="text-sm font-semibold">
-                {draft?.target_locations || '---'}
+                {draft?.target_locations?.split(',').map((c: string) => c.trim()).join('、') || '---'}
               </div>
             </div>
             <div>
-              <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Strategy</div>
+              <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">执行策略</div>
               <div className="text-sm font-semibold">
                 {draft?.strategy_mode ? (STRATEGY_LABELS[draft.strategy_mode] || draft.strategy_mode) : '---'}
               </div>
             </div>
             <div>
-              <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Connected Platforms</div>
+              <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">已连接平台</div>
               <div className="text-sm font-semibold">
-                Greenhouse ✓, Lever ✓
+                {connectedPlatforms.length > 0 ? connectedPlatforms.map(p => `${p} ✓`).join('、') : '---'}
               </div>
             </div>
             <div>
-              <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Resume Filename</div>
-              <div className="text-sm font-semibold italic">
+              <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">简历</div>
+              <div className="text-sm font-semibold">
                 {draft?.resume_filename || '---'}
               </div>
             </div>

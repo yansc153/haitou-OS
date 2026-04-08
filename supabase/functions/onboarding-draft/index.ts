@@ -7,12 +7,23 @@ serve(async (req) => {
   const corsResponse = handleCors(req);
   if (corsResponse) return corsResponse;
 
-  if (req.method !== 'PATCH') {
-    return err(405, 'METHOD_NOT_ALLOWED', 'PATCH only');
+  if (req.method !== 'PATCH' && req.method !== 'GET') {
+    return err(405, 'METHOD_NOT_ALLOWED', 'GET or PATCH');
   }
 
   const { user, error: authError, supabase } = await getAuthenticatedUser(req);
   if (authError) return authError;
+
+  // GET: return current draft
+  if (req.method === 'GET') {
+    const { data: draft } = await supabase!
+      .from('onboarding_draft')
+      .select('*')
+      .eq('user_id', user!.id)
+      .single();
+    if (!draft) return err(404, 'NOT_FOUND', 'No onboarding draft found');
+    return ok(draft);
+  }
 
   const body = await req.json();
   const { answers } = body as { answers: Record<string, unknown> };
