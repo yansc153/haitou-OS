@@ -160,6 +160,51 @@ serve(async (req) => {
       .update({ team_id: existingTeam.id, status: 'completed' })
       .eq('id', draft.id);
 
+    // If activate mode and team is still in onboarding → upgrade to active
+    if (mode === 'activate' && existingTeam.runtime_status !== 'active') {
+      const now = new Date().toISOString();
+      const allocationSeconds = PLAN_ALLOCATIONS['free'] || 21600;
+
+      // Allocate runtime
+      await serviceClient.from('runtime_ledger_entry').insert({
+        team_id: existingTeam.id,
+        entry_type: 'allocation',
+        runtime_delta_seconds: allocationSeconds,
+        balance_after_seconds: allocationSeconds,
+        trigger_source: 'billing',
+        reason: 'Initial free plan allocation',
+      });
+
+      // Activate team
+      await serviceClient.from('team').update({
+        status: 'active',
+        runtime_status: 'active',
+        started_at: now,
+        activated_at: now,
+      }).eq('id', existingTeam.id);
+
+      // Session start
+      await serviceClient.from('runtime_ledger_entry').insert({
+        team_id: existingTeam.id,
+        entry_type: 'session_start',
+        runtime_delta_seconds: 0,
+        balance_after_seconds: allocationSeconds,
+        trigger_source: 'system',
+        session_window_start: now,
+      });
+
+      // Timeline event
+      await serviceClient.from('timeline_event').insert({
+        team_id: existingTeam.id,
+        event_type: 'team_started',
+        summary_text: '团队已启动运行',
+        actor_type: 'system',
+        visibility: 'feed',
+      });
+
+      return ok({ team_id: existingTeam.id, activated: true, runtime_balance_seconds: allocationSeconds });
+    }
+
     return ok({ team_id: existingTeam.id, already_exists: true, profile_updated: !!parsedProfile, repaired: true });
   }
 
