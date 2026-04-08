@@ -28,7 +28,7 @@ import { TaskExecutor } from './task-executor.js';
 import type { BillingService } from './services/billing.js';
 
 // Production intervals
-const DISPATCH_INTERVAL_MS = 60_000;               // 60s — main cycle
+const DISPATCH_INTERVAL_MS = 30_000;               // 30s — faster first response
 const SWEEP_STALE_INTERVAL_MS = 5 * 60_000;       // 5 min
 const SWEEP_BILLING_INTERVAL_MS = 60_000;          // 60s
 const HEARTBEAT_INTERVAL_MS = 5 * 60_000;          // 5 min

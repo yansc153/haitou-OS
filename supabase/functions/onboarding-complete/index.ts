@@ -65,7 +65,49 @@ serve(async (req) => {
 
   if (existingTeam) {
     // Team exists — ensure all dependent entities exist (idempotent repair)
-    const parsedProfile = (draft.answered_fields as Record<string, unknown>)?._parsed_profile as Record<string, unknown> | null;
+
+    // Parse resume if not yet parsed (critical for keyword generation)
+    const draftAnswers = (draft.answered_fields || {}) as Record<string, unknown>;
+    let parsedProfile = draftAnswers._parsed_profile as Record<string, unknown> | null;
+
+    if (mode === 'activate' && (!parsedProfile || Object.keys(parsedProfile).length < 4) && draft.resume_asset_id) {
+      try {
+        const { data: asset } = await serviceClient
+          .from('resume_asset')
+          .select('storage_path, file_mime_type, parse_status')
+          .eq('id', draft.resume_asset_id)
+          .single();
+
+        if (asset && asset.parse_status !== 'parsed') {
+          const { data: fileData } = await serviceClient.storage.from('resumes').download(asset.storage_path);
+          if (fileData) {
+            const bytes = new Uint8Array(await fileData.arrayBuffer());
+            const rawText = await extractResumeText(bytes, asset.file_mime_type);
+
+            const parseResult = await callHaiku(
+              'You are a resume parsing + profile extraction engine. Given raw resume text, extract a structured profile. Return JSON with: full_name, contact_email, contact_phone, current_location, years_of_experience, seniority_level, primary_domain, headline_summary, experiences (array), education (array), skills (array), languages (array), inferred_role_directions (array), source_language ("zh"|"en"|"bilingual"), parse_confidence ("high"|"medium"|"low"). Do not invent data not in the text.',
+              rawText.substring(0, 20000),
+              2048,
+            );
+            parsedProfile = parseResult.parsed;
+
+            // Save back to draft
+            draftAnswers._parsed_profile = parsedProfile;
+            await serviceClient.from('onboarding_draft').update({
+              answered_fields: draftAnswers,
+              resume_upload_status: 'processed',
+            }).eq('id', draft.id);
+
+            await serviceClient.from('resume_asset').update({
+              parse_status: 'parsed', upload_status: 'processed',
+            }).eq('id', draft.resume_asset_id);
+          }
+        }
+      } catch (e) {
+        console.warn('[onboarding-complete] Resume parsing in repair path failed:', (e as Error).message);
+        // Continue with whatever profile we have
+      }
+    }
     if (parsedProfile && Object.keys(parsedProfile).length > 3) {
       await serviceClient.from('profile_baseline').update({
         full_name: parsedProfile.full_name || null,
@@ -193,14 +235,24 @@ serve(async (req) => {
         session_window_start: now,
       });
 
-      // Timeline event
-      await serviceClient.from('timeline_event').insert({
-        team_id: existingTeam.id,
-        event_type: 'team_started',
-        summary_text: '团队已启动运行',
-        actor_type: 'system',
-        visibility: 'feed',
-      });
+      // Immediate timeline events — give user instant feedback
+      const feedEvents = [
+        { event_type: 'team_started', summary_text: '团队已启动运行', actor_type: 'system', delay: 0 },
+        { event_type: 'agent_activated', summary_text: '调度官已上线，开始分析任务队列', actor_type: 'agent', delay: 1 },
+        { event_type: 'agent_activated', summary_text: '履历分析师已上线，开始分析简历', actor_type: 'agent', delay: 2 },
+        { event_type: 'keyword_generation', summary_text: '正在根据简历生成搜索关键词...', actor_type: 'agent', delay: 3 },
+      ];
+
+      for (const ev of feedEvents) {
+        await serviceClient.from('timeline_event').insert({
+          team_id: existingTeam.id,
+          event_type: ev.event_type,
+          summary_text: ev.summary_text,
+          actor_type: ev.actor_type,
+          visibility: 'feed',
+          occurred_at: new Date(Date.now() + ev.delay * 1000).toISOString(),
+        });
+      }
 
       return ok({ team_id: existingTeam.id, activated: true, runtime_balance_seconds: allocationSeconds });
     }
