@@ -2,6 +2,8 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { ok, err, created } from '../_shared/response.ts';
 import { getAuthenticatedUser, getServiceClient } from '../_shared/auth.ts';
+import { extractResumeText } from '../_shared/pdf-extract.ts';
+import { callHaiku } from '../_shared/llm.ts';
 
 const AGENT_ROSTER = [
   { role_code: 'orchestrator', title_zh: '调度官', persona: 'Commander' },
@@ -43,12 +45,8 @@ serve(async (req) => {
     return err(404, 'NOT_FOUND', 'No onboarding draft found');
   }
 
-  if (draft.resume_upload_status !== 'processed') {
-    return err(422, 'RESUME_MISSING', 'Resume must be uploaded and processed');
-  }
-
-  if (draft.status !== 'ready_for_activation') {
-    return err(422, 'ONBOARDING_INCOMPLETE', 'All required questions must be answered');
+  if (!draft.resume_asset_id && draft.resume_upload_status !== 'uploaded' && draft.resume_upload_status !== 'processed') {
+    return err(422, 'RESUME_MISSING', '请先上传简历');
   }
 
   // Check if team already exists (idempotency)
@@ -158,8 +156,50 @@ serve(async (req) => {
     return ok({ team_id: existingTeam.id, already_exists: true, profile_updated: !!parsedProfile, repaired: true });
   }
 
-  // ── Step 1: Create team (status=active from the start) ──
+  // ── Step 0: Parse resume if not already parsed ──
   const answers = draft.answered_fields as Record<string, unknown>;
+  let parsedProfileData = answers._parsed_profile as Record<string, unknown> | null;
+
+  if (!parsedProfileData && draft.resume_asset_id) {
+    try {
+      const { data: asset } = await serviceClient
+        .from('resume_asset')
+        .select('storage_path, file_mime_type, parse_status')
+        .eq('id', draft.resume_asset_id)
+        .single();
+
+      if (asset && asset.parse_status !== 'parsed') {
+        const { data: fileData } = await serviceClient.storage.from('resumes').download(asset.storage_path);
+        if (fileData) {
+          const bytes = new Uint8Array(await fileData.arrayBuffer());
+          const rawText = await extractResumeText(bytes, asset.file_mime_type);
+
+          const parseResult = await callHaiku(
+            'You are a resume parsing + profile extraction engine. Given raw resume text, extract a structured profile. Return JSON with: full_name, contact_email, contact_phone, current_location, years_of_experience, seniority_level, primary_domain, headline_summary, experiences (array), education (array), skills (array), languages (array), inferred_role_directions (array), source_language ("zh"|"en"|"bilingual"), parse_confidence ("high"|"medium"|"low"). Do not invent data not in the text.',
+            rawText.substring(0, 20000),
+            2048,
+          );
+          parsedProfileData = parseResult.parsed;
+
+          // Save parsed profile back to draft
+          answers._parsed_profile = parsedProfileData;
+          await serviceClient.from('onboarding_draft').update({
+            answered_fields: answers,
+            resume_upload_status: 'processed',
+          }).eq('id', draft.id);
+
+          await serviceClient.from('resume_asset').update({
+            parse_status: 'parsed', upload_status: 'processed',
+          }).eq('id', draft.resume_asset_id);
+        }
+      }
+    } catch (parseErr) {
+      // Parsing failed — continue with minimal profile (worker will retry later)
+      console.warn('[onboarding-complete] Resume parsing failed:', (parseErr as Error).message);
+    }
+  }
+
+  // ── Step 1: Create team (status=active from the start) ──
   const planTier = 'free';
   const now = new Date().toISOString();
 

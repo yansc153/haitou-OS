@@ -9,15 +9,16 @@ export default async function RootPage() {
     redirect('/landing');
   }
 
-  // V2 simplified routing: no team → /resume, has team → /home
   const { data: draft } = await supabase
     .from('onboarding_draft')
-    .select('status')
+    .select('status, answered_fields')
     .eq('user_id', user.id)
     .single();
 
   if (!draft || draft.status !== 'completed') {
-    redirect('/resume');
+    const step = (draft?.answered_fields as Record<string, unknown>)?.current_step as number ?? 1;
+    const routes: Record<number, string> = { 1: '/resume', 2: '/setup', 3: '/extension', 4: '/activation' };
+    redirect(routes[step] || '/resume');
   }
 
   redirect('/home');

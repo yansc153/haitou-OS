@@ -43,47 +43,29 @@ export default function OnboardingPage() {
       const session = await getValidSession(supabase);
       if (!session || !file) { setError('请先登录并上传简历'); setSubmitting(false); return; }
 
-      // Step 1: Upload + parse resume
-      setError('');
+      // Upload resume (save only, no parsing)
       const formData = new FormData();
       formData.append('file', file);
       const r1 = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/onboarding-resume`, {
         method: 'POST', headers: { Authorization: `Bearer ${session.access_token}` }, body: formData,
       });
       const j1 = await r1.json().catch(() => ({}));
-      console.log('[onboarding] Step 1 resume:', r1.status, j1);
       if (!r1.ok) {
         setError(`简历上传失败: ${j1.error?.message || r1.status}`); setSubmitting(false); return;
       }
-      if (j1.data?.status === 'parse_failed') {
-        // Don't block onboarding — LLM parsing can be retried later by the worker.
-        // Just log a warning and continue.
-        console.warn('[onboarding] Resume parse failed (will retry later):', j1.data.error);
-      }
 
-      // Step 2: Save answers
+      // Save preferences to draft
       const r2 = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/onboarding-draft`, {
         method: 'PATCH',
         headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ answers: { target_locations: cities.join(','), work_mode: workMode, strategy_mode: strategy, coverage_scope: 'cross_market' } }),
+        body: JSON.stringify({ answers: { target_locations: cities.join(','), work_mode: workMode, strategy_mode: strategy, coverage_scope: 'cross_market', current_step: 1 } }),
       });
       if (!r2.ok) {
         const j = await r2.json().catch(() => ({}));
-        setError(`保存偏好失败: ${j.error?.message || r2.status}`); setSubmitting(false); return;
+        setError(`保存失败: ${j.error?.message || r2.status}`); setSubmitting(false); return;
       }
 
-      // Step 3: Complete onboarding → create/update team + profile_baseline
-      const r3 = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/onboarding-complete`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
-      });
-      const j3 = await r3.json().catch(() => ({}));
-      console.log('[onboarding] Step 3 complete:', r3.status, j3);
-      if (!r3.ok) {
-        setError(`创建团队失败: ${j3.error?.message || r3.status}`); setSubmitting(false); return;
-      }
-
-      router.push('/home');
+      router.push('/setup');
     } catch (e) {
       setError(`请求失败: ${e instanceof Error ? e.message : '未知错误'}`);
       setSubmitting(false);
@@ -249,7 +231,7 @@ export default function OnboardingPage() {
                 disabled={uploadState !== 'done' || submitting}
                 className="w-full py-3.5 bg-foreground text-background rounded-xl text-base font-bold hover:opacity-90 transition-opacity disabled:opacity-30"
               >
-                {submitting ? '正在配置...' : '完成配置 →'}
+                {submitting ? '正在保存...' : '下一步 →'}
               </button>
             </div>
 
