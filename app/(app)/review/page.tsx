@@ -16,6 +16,19 @@ type ReviewData = {
   suggestions: string[];
 };
 
+const STAGE_ZH: Record<string, string> = {
+  discovered: '已发现',
+  screened: '已筛选',
+  prioritized: '已排序',
+  applied: '已投递',
+  submitted: '已投递',
+  contact_started: '已联系',
+  interviewing: '面试中',
+  offered: '已录用',
+  rejected: '已拒绝',
+  withdrawn: '已放弃',
+};
+
 const WINDOWS = [
   { value: '7d', label: '7 天' },
   { value: '14d', label: '14 天' },
@@ -28,6 +41,9 @@ export default function ReviewPage() {
   const [data, setData] = useState<ReviewData | null>(null);
   const [window, setWindow] = useState('7d');
   const [error, setError] = useState('');
+
+  const [retryKey, setRetryKey] = useState(0);
+  const retry = () => { setError(''); setRetryKey(k => k + 1); };
 
   useEffect(() => {
     let cancelled = false;
@@ -48,9 +64,7 @@ export default function ReviewPage() {
       }
     })();
     return () => { cancelled = true; };
-  }, [supabase, window]);
-
-  const retry = () => setWindow(w => w === '7d' ? '7d' : w); // force re-fetch by toggling
+  }, [supabase, window, retryKey]);
 
   if (loading) return <div className="p-8 text-center text-muted-foreground animate-pulse">加载中...</div>;
   if (error) return (
@@ -117,7 +131,7 @@ export default function ReviewPage() {
           <div className="space-y-2">
             {Object.entries(data.stage_distribution).map(([stage, count]) => (
               <div key={stage} className="flex items-center justify-between">
-                <span className="text-sm">{stage}</span>
+                <span className="text-sm">{STAGE_ZH[stage] || stage}</span>
                 <span className="rounded-full bg-muted px-2 py-0.5 text-sm font-medium">{count}</span>
               </div>
             ))}

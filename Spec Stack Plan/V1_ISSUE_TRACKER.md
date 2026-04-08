@@ -1,7 +1,8 @@
 # V1 Issue Tracker — Pipeline + 前端完整性
 
-> 日期: 2026-04-06
-> 状态: **12/12 已修复** — 待运行时 E2E 验证
+> 日期: 2026-04-08 (更新)
+> 状态: **14/16 已修复** — 待运行时 E2E 验证
+> Round 4 新增: #13-#16 (2026-04-08 发现)
 > 原则: 前端看不到 = 不存在。先看前端，再查后端，修完回前端验证。
 > 数据已清零，24h runtime 已分配，准备从头跑 pipeline。
 
@@ -139,6 +140,38 @@
 
 ---
 
+## 四-B、Round 4 Issues — 2026-04-08 新发现
+
+### Issue #13: [P0] 简历格式被破坏 — V2 FEATURE
+- **现象**: AI 用纯文本重排版简历，丢失原始 PDF 设计（字体、布局、样式）
+- **根因**: 架构限制 — `pdf-extract.ts` 提取纯文本 → AI 生成 JSON sections → `@react-pdf/renderer` 生成通用布局 PDF
+- **解决方案**: V2 需要 `pdf-lib` 实现 PDF 原地文本替换，保留原始布局和样式
+- **当前缓解**: 原始 PDF 在左侧展示（#16 修复），AI 定制版在右侧，用户可对比
+- **状态**: 📋 V2 FEATURE — 需架构重设计
+
+### Issue #14: [P0] 投递全部超时失败 ✅ RESOLVED
+- **现象**: Chromium 加载 Greenhouse/Lever 页面超过 30s，所有投递失败
+- **根因**: `waitUntil: 'networkidle'` 等待所有网络活动停止 — 但页面有 analytics/trackers 永不停止
+- **修复**: `greenhouse.ts` 和 `lever.ts` 所有 `networkidle` → `domcontentloaded` (与 LinkedIn/Lagou 一致)
+- **验证**: 启动团队 → GH/Lever 岗位投递不再超时
+
+### Issue #15: [P1] Landing 页面路由冲突 — 未复现
+- **现象**: 用户报告 marketing 页面叠在 opportunities 上
+- **排查**: 路由组完全隔离 `(marketing)` vs `(app)`，无共享 layout，无路由冲突
+  - `/landing` → `app/(marketing)/landing/page.tsx`
+  - `/opportunities` → `app/(app)/opportunities/page.tsx`
+  - 根 `/` → server redirect (auth-based)
+  - middleware 正确隔离 public/protected 路由
+- **状态**: ❓ 未复现 — 如有具体复现路径再调查
+
+### Issue #16: [P1] 原始 PDF 不显示 ✅ RESOLVED
+- **现象**: 机会详情页左侧"原始简历"区域为空
+- **根因**: `opportunity-detail/index.ts` 用 user-scoped client 查询 `resume_asset`，RLS 阻止读取 → 返回 null → 无 signed URL → 空 iframe
+- **修复**: 改用 `getServiceClient()` 查询 `resume_asset` 和生成 storage signed URL（已验证 user identity）
+- **验证**: 打开机会详情页 → 左侧显示原始 PDF
+
+---
+
 ## 五、修复优先级
 
 ```
@@ -158,6 +191,12 @@ Round 2: 前端展示完整（前端）
 
 Round 3: Loop 2 验证
   └── #11 回复→跟进→交接 全链路
+
+Round 4: 2026-04-08 新发现
+  ├── #13 [V2] 简历格式保留 — 需 pdf-lib 架构重设计
+  ├── #14 ✅ 投递超时 — networkidle → domcontentloaded
+  ├── #15 ❓ Landing 路由冲突 — 未复现
+  └── #16 ✅ 原始 PDF 显示 — service client 修复 RLS
 ```
 
 ---

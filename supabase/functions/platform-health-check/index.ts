@@ -1,42 +1,64 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { ok, err } from '../_shared/response.ts';
-import { getServiceClient } from '../_shared/auth.ts';
+import { getAuthenticatedUser, getServiceClient } from '../_shared/auth.ts';
 import { decrypt, isEncrypted } from '../_shared/vault.ts';
+import { PLATFORM_TTL_HOURS, PLATFORM_PROBE_URLS } from '../_shared/platform-rules.ts';
 
 /**
  * POST /platform-health-check
- * Called by pg_cron or orchestrator. Checks all active connections.
- * Uses service role — no user auth needed.
+ *
+ * Mode 1 — Single connection (user JWT):
+ *   POST { connection_id } with Authorization: Bearer <user-jwt>
+ *   Checks one connection owned by the authenticated user.
+ *
+ * Mode 2 — Batch (service role / CRON_SECRET):
+ *   POST {} with Authorization: Bearer <service-key|cron-secret>
+ *   Checks all active connections (called by pg_cron or orchestrator).
  *
  * Two-phase check:
  * 1. TTL-based staleness (fast, no network)
  * 2. Lightweight connectivity probe per platform (if token available)
  */
 
-const PLATFORM_TTL_HOURS: Record<string, number> = {
-  linkedin: 24,
-  boss_zhipin: 3,
-  zhaopin: 24,
-  lagou: 24,
-  liepin: 12,
-  greenhouse: 720, // API key, rarely expires
-  lever: 720,
-};
-
-// Lightweight probe URLs — a simple authenticated GET to detect session validity
-const PLATFORM_PROBE_URLS: Record<string, string> = {
-  linkedin: 'https://www.linkedin.com/feed/',
-  zhaopin: 'https://www.zhaopin.com/home',
-  lagou: 'https://www.lagou.com/',
-  boss_zhipin: 'https://www.zhipin.com/web/geek/job',
-};
-
 serve(async (req) => {
   const corsResponse = handleCors(req);
   if (corsResponse) return corsResponse;
 
-  // Authenticate: require service role key or CRON_SECRET (exact match)
+  let body: Record<string, unknown> = {};
+  try { body = await req.json(); } catch { /* empty body is fine for batch mode */ }
+
+  const serviceClient = getServiceClient();
+
+  // --- Auth path 1: User JWT + connection_id → single-connection mode ---
+  if (body.connection_id) {
+    const { user, error: authError } = await getAuthenticatedUser(req);
+    if (authError || !user) return authError ?? err(401, 'AUTH_REQUIRED', 'Invalid session');
+
+    // Look up user's team
+    const { data: member } = await serviceClient
+      .from('team')
+      .select('id')
+      .eq('user_id', user.id)
+      .limit(1)
+      .single();
+
+    if (!member) return err(403, 'NO_TEAM', 'User has no team');
+
+    // Fetch the specific connection — must belong to user's team
+    const { data: conn } = await serviceClient
+      .from('platform_connection')
+      .select('id, team_id, platform_id, status, session_token_ref, session_granted_at, capability_status, user_consent_scope')
+      .eq('id', body.connection_id)
+      .eq('team_id', member.id)
+      .single();
+
+    if (!conn) return err(404, 'NOT_FOUND', 'Connection not found or not owned by your team');
+
+    return await checkSingleConnection(serviceClient, conn);
+  }
+
+  // --- Auth path 2: Service role / CRON_SECRET → batch mode ---
   const authHeader = req.headers.get('Authorization') || '';
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
   const cronSecret = Deno.env.get('CRON_SECRET') || '';
@@ -45,8 +67,6 @@ serve(async (req) => {
   if (!isAuthorized) {
     return err(401, 'UNAUTHORIZED', 'Authentication required');
   }
-
-  const serviceClient = getServiceClient();
 
   // Get all active connections with their token
   const { data: connections } = await serviceClient
@@ -131,6 +151,68 @@ serve(async (req) => {
 
   return ok({ checked: connections.length, expired: expiredCount, probed: probedCount });
 });
+
+async function checkSingleConnection(
+  serviceClient: ReturnType<typeof getServiceClient>,
+  conn: { id: string; team_id: string; platform_id: string; status: string; session_token_ref: string | null; session_granted_at: string | null; capability_status: Record<string, string> | null; user_consent_scope?: string },
+) {
+  // Look up platform code
+  const { data: platform } = await serviceClient
+    .from('platform_definition')
+    .select('code')
+    .eq('id', conn.platform_id)
+    .single();
+
+  const code = platform?.code || 'unknown';
+  const ttlHours = PLATFORM_TTL_HOURS[code] ?? 24;
+  const now = Date.now();
+  const nowIso = new Date().toISOString();
+  let expired = false;
+
+  // Phase 1: TTL check
+  if (conn.session_granted_at) {
+    const ageHours = (now - new Date(conn.session_granted_at).getTime()) / (1000 * 60 * 60);
+    if (ageHours > ttlHours) {
+      if (conn.status === 'active') await markExpired(serviceClient, conn);
+      return ok({ checked: 1, expired: 1, probed: 0 });
+    }
+  }
+
+  // Phase 2: Probe
+  const probeUrl = PLATFORM_PROBE_URLS[code];
+  if (probeUrl && conn.session_token_ref) {
+    try {
+      const probeResult = await probeConnection(conn.session_token_ref, probeUrl, code);
+      const currentCaps = conn.capability_status || {};
+      const updatedCaps = { ...currentCaps, ...probeResult.capabilities };
+
+      await serviceClient
+        .from('platform_connection')
+        .update({ last_health_check_at: nowIso, capability_status: updatedCaps, last_capability_check_at: nowIso })
+        .eq('id', conn.id);
+
+      if (probeResult.sessionExpired) {
+        if (conn.status === 'active') await markExpired(serviceClient, conn);
+        expired = true;
+      }
+
+      return ok({ checked: 1, expired: expired ? 1 : 0, probed: 1 });
+    } catch {
+      await serviceClient
+        .from('platform_connection')
+        .update({ last_health_check_at: nowIso })
+        .eq('id', conn.id);
+      return ok({ checked: 1, expired: 0, probed: 0, probe_error: true });
+    }
+  }
+
+  // No probe available
+  await serviceClient
+    .from('platform_connection')
+    .update({ last_health_check_at: nowIso })
+    .eq('id', conn.id);
+  return ok({ checked: 1, expired: 0, probed: 0 });
+}
 
 async function markExpired(
   serviceClient: ReturnType<typeof getServiceClient>,

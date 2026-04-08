@@ -45,7 +45,7 @@ export async function callHaiku(
   let totalInput = 0;
   let totalOutput = 0;
 
-  // First attempt: qwen-turbo
+  // First attempt: qwen-turbo (single try, then one escalation — keep within Edge Function wall-clock)
   const r1 = await callModel(apiKey, MODEL_TURBO, fullSystem, userContent, maxOutputTokens);
   totalInput += r1.inputTokens;
   totalOutput += r1.outputTokens;
@@ -55,7 +55,7 @@ export async function callHaiku(
     return { parsed, inputTokens: totalInput, outputTokens: totalOutput, model: MODEL_TURBO };
   }
 
-  // Retry with format hint
+  // One retry with format hint (same model, fast)
   const retryContent = `${userContent}\n\n[SYSTEM NOTE: Your previous response was not valid JSON. Respond ONLY with the JSON object, no markdown fences, no explanation.]`;
   const r2 = await callModel(apiKey, MODEL_TURBO, fullSystem, retryContent, maxOutputTokens);
   totalInput += r2.inputTokens;
@@ -66,7 +66,7 @@ export async function callHaiku(
     return { parsed, inputTokens: totalInput, outputTokens: totalOutput, model: MODEL_TURBO };
   }
 
-  // Escalate to qwen-plus
+  // Single escalation to qwen-plus (skip qwen-max to stay within timeout budget)
   const r3 = await callModel(apiKey, MODEL_PLUS, fullSystem, retryContent, maxOutputTokens);
   totalInput += r3.inputTokens;
   totalOutput += r3.outputTokens;
@@ -74,16 +74,6 @@ export async function callHaiku(
 
   if (parsed) {
     return { parsed, inputTokens: totalInput, outputTokens: totalOutput, model: MODEL_PLUS };
-  }
-
-  // Last resort: qwen-max
-  const r4 = await callModel(apiKey, MODEL_MAX, fullSystem, retryContent, maxOutputTokens);
-  totalInput += r4.inputTokens;
-  totalOutput += r4.outputTokens;
-  parsed = tryParseJson(r4.text);
-
-  if (parsed) {
-    return { parsed, inputTokens: totalInput, outputTokens: totalOutput, model: MODEL_MAX };
   }
 
   throw new Error('LLM_PARSE_ERROR: Failed to get valid JSON after retry and escalation');
@@ -97,7 +87,7 @@ async function callModel(
   maxTokens: number,
 ): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30000); // 30s per call
+  const timeout = setTimeout(() => controller.abort(), 20000); // 20s per call (3 calls × 20s = 60s budget)
 
   try {
     const response = await fetch(`${DASHSCOPE_BASE}/chat/completions`, {

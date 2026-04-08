@@ -9,13 +9,15 @@
 const P = 4; // pixel size
 
 // Helper: draw a filled pixel at grid position
-function px(x: number, y: number, color = '#1a1a1a') {
-  return <rect key={`${x}-${y}`} x={x * P} y={y * P} width={P} height={P} fill={color} />;
+function px(x: number, y: number, color = '#1a1a1a', prefix = '') {
+  return <rect key={`${prefix}${x}-${y}`} x={x * P} y={y * P} width={P} height={P} fill={color} />;
 }
 
+let _pixelGroupId = 0;
 // Helper: draw multiple pixels from coordinate array
 function pixels(coords: [number, number][], color = '#1a1a1a') {
-  return coords.map(([x, y]) => px(x, y, color));
+  const gid = _pixelGroupId++;
+  return coords.map(([x, y]) => px(x, y, color, `g${gid}-`));
 }
 
 function AvatarSvg({ children, size = 64 }: { children: React.ReactNode; size?: number }) {

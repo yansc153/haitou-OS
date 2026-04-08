@@ -3,6 +3,7 @@ import { handleCors } from '../_shared/cors.ts';
 import { ok, err } from '../_shared/response.ts';
 import { getAuthenticatedUser, getServiceClient } from '../_shared/auth.ts';
 import { encrypt } from '../_shared/vault.ts';
+import { PLATFORM_TTL_HOURS } from '../_shared/platform-rules.ts';
 
 serve(async (req) => {
   const corsResponse = handleCors(req);
@@ -47,10 +48,30 @@ serve(async (req) => {
     const scope = consent_scope || 'apply_and_message';
     const hasToken = session_token && session_token.length > 0 && session_token !== 'none';
 
-    // Encrypt if we have a real token
+    // Cookie-dependent platforms MUST have a valid token to be connected
+    const NO_COOKIE_PLATFORMS = ['greenhouse', 'lever'];
+    if (!NO_COOKIE_PLATFORMS.includes(platform_code) && !hasToken) {
+      return err(400, 'TOKEN_REQUIRED', `${platform.display_name || platform_code} 需要登录凭据才能连接`);
+    }
+
+    // Validate and encrypt cookie token
     let encryptedToken = null;
     let tokenFingerprint = 'no_token';
     if (hasToken) {
+      // Validate cookie JSON structure
+      try {
+        const parsed = JSON.parse(session_token);
+        if (!Array.isArray(parsed) || parsed.length === 0) {
+          return err(400, 'INVALID_COOKIES', 'Cookie数据格式无效');
+        }
+        const hasValidCookie = parsed.some((c: { name?: string; value?: string }) => c.name && c.value);
+        if (!hasValidCookie) {
+          return err(400, 'INVALID_COOKIES', 'Cookie数据不包含有效凭据');
+        }
+      } catch {
+        return err(400, 'INVALID_COOKIES', 'Cookie数据解析失败');
+      }
+
       const encoder = new TextEncoder();
       const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(session_token));
       tokenFingerprint = Array.from(new Uint8Array(hashBuffer))
@@ -59,6 +80,10 @@ serve(async (req) => {
         .slice(0, 16);
       encryptedToken = await encrypt(session_token);
     }
+
+    // Calculate session expiry based on platform TTL
+    const ttlHours = PLATFORM_TTL_HOURS[platform_code] ?? 24;
+    const sessionExpiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000).toISOString();
 
     // Upsert connection
     const { data: connection, error: connError } = await serviceClient
@@ -70,6 +95,7 @@ serve(async (req) => {
           status: 'active',
           session_token_ref: encryptedToken,
           session_granted_at: now,
+          session_expires_at: sessionExpiresAt,
           user_consent_granted_at: now,
           user_consent_scope: scope,
           failure_count: 0,
@@ -96,7 +122,7 @@ serve(async (req) => {
       user_agent: req.headers.get('user-agent') || 'unknown',
     });
 
-    return ok({ connection_id: connection.id, platform_code, status: 'active' });
+    return ok({ connection_id: connection.id, platform_code, status: 'active', session_expires_at: sessionExpiresAt, ttl_hours: ttlHours });
   } catch (e) {
     return err(500, 'INTERNAL_ERROR', `Unexpected: ${(e as Error).message}`);
   }

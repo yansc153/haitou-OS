@@ -35,7 +35,7 @@ const HEARTBEAT_INTERVAL_MS = 5 * 60_000;          // 5 min
 const MAX_CONCURRENT_TASKS_PER_TEAM = 3;
 
 // Sweep intervals — production
-const DISCOVERY_INTERVAL_MS = 60 * 60_000;         // 60 min
+const DISCOVERY_INTERVAL_MS = 5 * 60_000;           // 5 min (temp: was 60 min)
 const REPLY_POLL_INTERVAL_MS = 15 * 60_000;        // 15 min
 const FOLLOWUP_SWEEP_INTERVAL_MS = 15 * 60_000;    // 15 min
 const RESCREEN_INTERVAL_MS = 10 * 60_000;           // 10 min
@@ -117,6 +117,9 @@ export class DispatchLoop {
 
     const agentMap = new Map(agents.map(a => [a.template_role_code, a.id]));
 
+    // ── Pre-loop: Keyword generation (blocks discovery if missing) ──
+    await this.sweepKeywordGeneration(teamId, agentMap);
+
     // ── Loop A: Opportunity Generation ──
     await this.sweepDiscovery(teamId, agentMap);
     await this.sweepUnscreenedOpportunities(teamId, agentMap);
@@ -126,6 +129,41 @@ export class DispatchLoop {
     // ── Loop B: Opportunity Progression ──
     await this.sweepReplyPolling(teamId, agentMap);
     await this.sweepFollowUps(teamId, agentMap);
+  }
+
+  /**
+   * Sweep: Keyword Generation — 履历分析师
+   * Checks if profile_baseline.search_keywords is null → creates keyword_generation task.
+   * This MUST run before discovery — discovery depends on keywords.
+   */
+  private async sweepKeywordGeneration(teamId: string, agentMap: Map<string, string>) {
+    // Check if keywords already exist
+    const { data: baseline } = await this.db
+      .from('profile_baseline')
+      .select('search_keywords')
+      .eq('team_id', teamId)
+      .order('version', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (baseline?.search_keywords) return; // Already generated
+
+    // Check if keyword_generation task already pending/running
+    const { count } = await this.db
+      .from('agent_task')
+      .select('id', { count: 'exact', head: true })
+      .eq('team_id', teamId)
+      .eq('task_type', 'keyword_generation')
+      .in('status', ['queued', 'running']);
+
+    if (count && count > 0) return; // Already in progress
+
+    const agentId = agentMap.get('profile_intelligence') || agentMap.get('orchestrator');
+    if (!agentId) return;
+
+    await this.createTask(teamId, agentId, 'keyword_generation', 'opportunity_generation', 'critical',
+      `keyword_gen:${teamId}:${Date.now()}`);
+    console.log(`[sweep] 履历分析师 → keyword_generation task created for team ${teamId}`);
   }
 
   /**
@@ -350,6 +388,7 @@ export class DispatchLoop {
     // Task-type priority per spec § Priority Algorithm:
     // handoff > reply > follow-up > submission > material > screening > discovery
     const TASK_TYPE_PRIORITY: Record<string, number> = {
+      keyword_generation: 8,
       handoff_takeover: 7,
       reply_processing: 6,
       follow_up: 5,
@@ -432,6 +471,7 @@ export class DispatchLoop {
       trigger_source: 'orchestrator',
       queued_at: new Date().toISOString(),
       max_retries: 3,
+      retry_count: 0,
       ...(relatedEntityId && { related_entity_id: relatedEntityId }),
       ...(relatedEntityType && { related_entity_type: relatedEntityType }),
     });

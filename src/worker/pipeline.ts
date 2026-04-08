@@ -26,65 +26,26 @@ const REC_ZH_MAP: Record<string, string> = {
   advance: '推荐投递', watch: '持续观望', drop: '不匹配放弃', needs_context: '需更多信息',
 };
 
-/** Industry → Greenhouse/Lever board tokens mapping
- * IMPORTANT: Lever slugs are verified against https://api.lever.co/v0/postings/{slug}
- * Only include slugs that return 200. Slugs are case-sensitive (lowercase).
+/**
+ * Search keywords are now AI-generated from the user's resume.
+ * Stored in profile_baseline.search_keywords as JSONB.
+ * See: KEYWORD_EXTRACTION_REDESIGN.md § 七 因果链
  */
-const DOMAIN_BOARD_MAP: Record<string, Array<{ token: string; company: string; platform: 'greenhouse' | 'lever' }>> = {
-  fintech: [
-    { token: 'stripe', company: 'Stripe', platform: 'greenhouse' },
-    { token: 'square', company: 'Square', platform: 'greenhouse' },
-    { token: 'coinbase', company: 'Coinbase', platform: 'greenhouse' },
-    { token: 'revolut', company: 'Revolut', platform: 'greenhouse' },
-    { token: 'plaid', company: 'Plaid', platform: 'lever' },
-    { token: 'wealthsimple', company: 'Wealthsimple', platform: 'lever' },
-  ],
-  web3: [
-    { token: 'coinbase', company: 'Coinbase', platform: 'greenhouse' },
-    { token: 'consensys', company: 'ConsenSys', platform: 'greenhouse' },
-    { token: 'uniswaplabs', company: 'Uniswap', platform: 'greenhouse' },
-    { token: 'chainalysis', company: 'Chainalysis', platform: 'greenhouse' },
-    { token: 'palantir', company: 'Palantir', platform: 'lever' },
-  ],
-  ai: [
-    { token: 'openai', company: 'OpenAI', platform: 'greenhouse' },
-    { token: 'anthropic', company: 'Anthropic', platform: 'greenhouse' },
-    { token: 'scale', company: 'Scale AI', platform: 'greenhouse' },
-    { token: 'databricks', company: 'Databricks', platform: 'greenhouse' },
-    { token: 'palantir', company: 'Palantir', platform: 'lever' },
-    { token: 'netflix', company: 'Netflix', platform: 'lever' },
-  ],
-  saas: [
-    { token: 'notion', company: 'Notion', platform: 'greenhouse' },
-    { token: 'vercel', company: 'Vercel', platform: 'greenhouse' },
-    { token: 'supabase', company: 'Supabase', platform: 'greenhouse' },
-    { token: 'toptal', company: 'Toptal', platform: 'lever' },
-    { token: 'spotify', company: 'Spotify', platform: 'lever' },
-    { token: 'lever', company: 'Lever', platform: 'lever' },
-  ],
-  general: [
-    { token: 'netflix', company: 'Netflix', platform: 'lever' },
-    { token: 'spotify', company: 'Spotify', platform: 'lever' },
-    { token: 'toptal', company: 'Toptal', platform: 'lever' },
-    { token: 'notion', company: 'Notion', platform: 'greenhouse' },
-    { token: 'stripe', company: 'Stripe', platform: 'greenhouse' },
-    { token: 'airbnb', company: 'Airbnb', platform: 'greenhouse' },
-    { token: 'datadog', company: 'Datadog', platform: 'greenhouse' },
-  ],
+type SearchKeywords = {
+  en_keywords: string[];
+  zh_keywords: string[];
+  target_companies: string[];
+  primary_domain: string;
+  seniority_bracket: string;
 };
 
-/** Get board tokens for a team based on profile_baseline.primary_domain */
-function getBoardsForDomain(domain: string | null, platformCode: 'greenhouse' | 'lever'): Array<{ token: string; company: string }> {
-  const key = domain?.toLowerCase() || 'general';
-  const boards = DOMAIN_BOARD_MAP[key] || DOMAIN_BOARD_MAP.general;
-  const filtered = boards.filter(b => b.platform === platformCode);
-  // Shuffle and take 5 per cycle to avoid always hitting the same boards
-  const shuffled = filtered.sort(() => Math.random() - 0.5);
-  return shuffled.slice(0, 5).map(({ token, company }) => ({ token, company }));
+/** Normalize company name to Greenhouse/Lever board slug */
+function companyToSlug(company: string): string {
+  return company.toLowerCase().replace(/[^a-z0-9]/g, '').replace(/inc$|ltd$|co$/, '');
 }
 
 /** Record token usage — uses raw SQL for atomic increment to avoid race conditions */
-async function recordTokenUsage(
+export async function recordTokenUsage(
   db: SupabaseClient, teamId: string,
   input: number, output: number,
 ) {
@@ -116,6 +77,62 @@ export class PipelineOrchestrator {
     this.budget = new BudgetService(db);
   }
 
+  /** Check if an opportunity already exists by external_ref OR by company+title combo. */
+  private async isDuplicate(teamId: string, job: { external_ref: string; company_name: string; job_title: string }): Promise<boolean> {
+    // Check by external_ref (exact platform ID match)
+    const { count: refCount } = await this.db
+      .from('opportunity')
+      .select('id', { count: 'exact', head: true })
+      .eq('team_id', teamId)
+      .eq('external_ref', job.external_ref);
+    if (refCount && refCount > 0) return true;
+
+    // Check by company_name + job_title (catches same job posted with different IDs)
+    const { count: titleCount } = await this.db
+      .from('opportunity')
+      .select('id', { count: 'exact', head: true })
+      .eq('team_id', teamId)
+      .eq('company_name', job.company_name)
+      .eq('job_title', job.job_title);
+    if (titleCount && titleCount > 0) return true;
+
+    return false;
+  }
+
+  /** Load AI-generated search keywords from profile_baseline */
+  async getSearchKeywords(teamId: string): Promise<SearchKeywords | null> {
+    const { data: baseline } = await this.db
+      .from('profile_baseline')
+      .select('search_keywords')
+      .eq('team_id', teamId)
+      .order('version', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (!baseline?.search_keywords) return null;
+    const kw = baseline.search_keywords as Record<string, unknown>;
+    return {
+      en_keywords: (kw.en_keywords as string[]) || [],
+      zh_keywords: (kw.zh_keywords as string[]) || [],
+      target_companies: (kw.target_companies as string[]) || [],
+      primary_domain: (kw.primary_domain as string) || 'general',
+      seniority_bracket: (kw.seniority_bracket as string) || 'mid',
+    };
+  }
+
+  /** Insert a timeline event for the real-time feed */
+  private async emitEvent(teamId: string, eventType: string, summary: string, entityId?: string): Promise<void> {
+    await this.db.from('timeline_event').insert({
+      team_id: teamId,
+      event_type: eventType,
+      summary_text: summary,
+      actor_type: 'agent',
+      related_entity_type: entityId ? 'opportunity' : undefined,
+      related_entity_id: entityId,
+      visibility: 'feed',
+    });
+  }
+
   /** Validate and execute a stage transition. Throws on illegal transition. */
   private async transitionOpportunityStage(
     opportunityId: string,
@@ -141,6 +158,13 @@ export class PipelineOrchestrator {
    * Called by the dispatch loop when a discovery task is dispatched.
    */
   async runDiscoveryCycle(teamId: string): Promise<void> {
+    // Pre-flight: search_keywords must exist (generated by keyword_generation task)
+    const keywords = await this.getSearchKeywords(teamId);
+    if (!keywords || (keywords.en_keywords.length === 0 && keywords.zh_keywords.length === 0)) {
+      console.log('[pipeline] No search_keywords for team, skipping discovery (waiting for keyword_generation)');
+      return;
+    }
+
     // Get team config
     const { data: team } = await this.db
       .from('team')
@@ -150,10 +174,10 @@ export class PipelineOrchestrator {
 
     if (!team) return;
 
-    // Get connected platforms
+    // Get connected platforms (include expiry and failure tracking)
     const { data: connections } = await this.db
       .from('platform_connection')
-      .select('id, platform_id, status')
+      .select('id, platform_id, status, session_expires_at, session_granted_at, failure_count')
       .eq('team_id', teamId)
       .eq('status', 'active');
 
@@ -169,8 +193,49 @@ export class PipelineOrchestrator {
     if (!platforms) return;
 
     // Run discovery per platform
+    console.log(`[pipeline] Platforms to discover: ${platforms.map((p: { code: string }) => p.code).join(', ')} (${platforms.length} total, ${connections.length} active connections)`);
     for (const platform of platforms) {
       const pipelineMode = platform.pipeline_mode as PipelineMode;
+      const conn = connections.find((c: { platform_id: string }) => c.platform_id === platform.id);
+      console.log(`[pipeline] Starting ${platform.code} (mode=${pipelineMode}, conn=${conn ? 'found' : 'MISSING'})`);
+
+      // TTL pre-flight: skip if session has expired (exempt no-cookie platforms like GH/Lever)
+      const NO_COOKIE = ['greenhouse', 'lever'];
+      if (conn?.session_expires_at && !NO_COOKIE.includes(platform.code) && new Date(conn.session_expires_at as string) < new Date()) {
+        console.warn(`[pipeline] ${platform.code}: session TTL expired, marking session_expired`);
+        await this.db.from('platform_connection').update({
+          status: 'session_expired',
+          requires_user_action: true,
+          failure_reason: '登录凭据已超过有效期，请重新连接',
+        }).eq('id', conn.id);
+        // Emit team event for user notification
+        await this.db.from('team_event').insert({
+          team_id: teamId,
+          event_type: 'platform_session_expired',
+          summary: `${platform.display_name_zh || platform.display_name}登录已过期，已暂停相关任务`,
+          metadata: { platform_code: platform.code, reason: 'ttl_expired' },
+        });
+        continue;
+      }
+
+      // TTL warning: if remaining < 20% of total TTL, emit a warning event
+      if (conn?.session_expires_at && conn?.session_granted_at) {
+        const expires = new Date(conn.session_expires_at as string).getTime();
+        const granted = new Date(conn.session_granted_at as string).getTime();
+        const now = Date.now();
+        const totalTTL = expires - granted;
+        const remaining = expires - now;
+        if (remaining > 0 && remaining < totalTTL * 0.2) {
+          const remainingMin = Math.round(remaining / (1000 * 60));
+          console.warn(`[pipeline] ${platform.code}: session expiring soon (${remainingMin}min remaining)`);
+          await this.db.from('team_event').insert({
+            team_id: teamId,
+            event_type: 'platform_session_expiring',
+            summary: `${platform.display_name_zh || platform.display_name}登录即将过期（剩余 ${remainingMin} 分钟）`,
+            metadata: { platform_code: platform.code, remaining_minutes: remainingMin },
+          });
+        }
+      }
 
       try {
         switch (platform.code) {
@@ -196,8 +261,35 @@ export class PipelineOrchestrator {
             await this.runBossDiscovery(teamId, platform, pipelineMode);
             break;
         }
+        // Success: update tracking
+        if (conn) {
+          await this.db.from('platform_connection').update({
+            last_successful_action_at: new Date().toISOString(),
+            failure_count: 0,
+          }).eq('id', conn.id);
+        }
       } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
         console.error(`[pipeline] Discovery error for ${platform.code}:`, err);
+
+        // Handle session expired errors from executors
+        if (errMsg.includes('session_expired') || errMsg.includes('auth wall')) {
+          if (conn) {
+            const currentFailures = (conn.failure_count as number) || 0;
+            await this.db.from('platform_connection').update({
+              status: 'session_expired',
+              requires_user_action: true,
+              failure_reason: `${platform.display_name_zh || platform.display_name}登录已失效`,
+              failure_count: currentFailures + 1,
+            }).eq('id', conn.id);
+            await this.db.from('team_event').insert({
+              team_id: teamId,
+              event_type: 'platform_session_expired',
+              summary: `${platform.display_name_zh || platform.display_name}登录已失效，已暂停相关任务`,
+              metadata: { platform_code: platform.code, reason: 'auth_wall', error: errMsg },
+            });
+          }
+        }
       }
     }
   }
@@ -207,168 +299,123 @@ export class PipelineOrchestrator {
     platform: Record<string, unknown>,
     pipelineMode: string
   ): Promise<void> {
-    // Get boards from profile_baseline.primary_domain
-    const { data: baseline } = await this.db
-      .from('profile_baseline')
-      .select('primary_domain')
-      .eq('team_id', teamId)
-      .order('version', { ascending: false })
-      .limit(1)
-      .single();
+    const keywords = await this.getSearchKeywords(teamId);
+    if (!keywords) return;
 
-    const sampleBoards = getBoardsForDomain(baseline?.primary_domain ?? null, 'greenhouse');
+    // Use AI-generated target_companies as board slugs
+    const slugs = keywords.target_companies.map(c => companyToSlug(c));
+    // Shuffle and take 5 per cycle
+    const boards = slugs.sort(() => Math.random() - 0.5).slice(0, 5);
+    console.log(`[pipeline] greenhouse: AI keywords, boards=${boards.join(',')}`);
 
-    for (const board of sampleBoards) {
-      const jobs = await discoverGreenhouseJobs(board.token, board.company, { limit: 10 });
+    await this.emitEvent(teamId, 'platform_search_started', `岗位研究员开始搜索 Greenhouse（${boards.length} 个公司）`);
 
-      for (const job of jobs) {
-        // Check for duplicates
-        const { count } = await this.db
-          .from('opportunity')
-          .select('id', { count: 'exact', head: true })
-          .eq('team_id', teamId)
-          .eq('external_ref', job.external_ref);
+    let totalFound = 0;
+    for (const slug of boards) {
+      try {
+        const jobs = await discoverGreenhouseJobs(slug, slug, { limit: 10 });
+        console.log(`[pipeline] greenhouse/${slug}: ${jobs.length} jobs`);
+        totalFound += jobs.length;
 
-        if (count && count > 0) continue; // Already discovered
-
-        // Create opportunity
-        const { data: opp } = await this.db
-          .from('opportunity')
-          .insert({
-            team_id: teamId,
-            stage: OpportunityStage.Discovered,
-            company_name: job.company_name,
-            job_title: job.job_title,
-            location_label: job.location_label,
-            job_description_url: job.job_description_url,
-            job_description_text: job.job_description_text,
-            source_platform_id: platform.id as string,
-            external_ref: job.external_ref,
-            source_freshness: 'new',
-          })
-          .select('id')
-          .single();
-
-        if (!opp) continue;
-
-        // Run screening pipeline
-        await this.runScreeningPipeline(teamId, opp.id, pipelineMode);
+        for (const job of jobs) {
+          if (await this.isDuplicate(teamId, job)) continue;
+          const { data: opp } = await this.db
+            .from('opportunity')
+            .insert({
+              team_id: teamId, stage: OpportunityStage.Discovered,
+              company_name: job.company_name, job_title: job.job_title,
+              location_label: job.location_label, job_description_url: job.job_description_url,
+              job_description_text: job.job_description_text,
+              source_platform_id: platform.id as string, external_ref: job.external_ref,
+              source_freshness: 'new',
+            }).select('id').single();
+          if (!opp) continue;
+          await this.runScreeningPipeline(teamId, opp.id, pipelineMode);
+        }
+      } catch (e) {
+        console.log(`[greenhouse] Board "${slug}" error — skipping: ${(e as Error).message.slice(0, 80)}`);
       }
     }
+    await this.emitEvent(teamId, 'platform_search_completed', `岗位研究员在 Greenhouse 搜索完成，发现 ${totalFound} 个岗位`);
   }
 
   private async runLeverDiscovery(teamId: string, platform: Record<string, unknown>, pipelineMode: string): Promise<void> {
-    // Get boards from profile_baseline.primary_domain
-    const { data: baseline } = await this.db
-      .from('profile_baseline')
-      .select('primary_domain')
-      .eq('team_id', teamId)
-      .order('version', { ascending: false })
-      .limit(1)
-      .single();
+    const keywords = await this.getSearchKeywords(teamId);
+    if (!keywords) return;
 
-    const sampleCompanies = getBoardsForDomain(baseline?.primary_domain ?? null, 'lever')
-      .map(b => ({ slug: b.token, name: b.company }));
-    for (const company of sampleCompanies) {
-      const jobs = await discoverLeverJobs(company.slug, company.name, { limit: 10 });
-      for (const job of jobs) {
-        const { count } = await this.db
-          .from('opportunity')
-          .select('id', { count: 'exact', head: true })
-          .eq('team_id', teamId)
-          .eq('external_ref', job.external_ref);
-        if (count && count > 0) continue;
+    const slugs = keywords.target_companies.map(c => companyToSlug(c));
+    const companies = slugs.sort(() => Math.random() - 0.5).slice(0, 5);
+    console.log(`[pipeline] lever: AI keywords, slugs=${companies.join(',')}`);
 
-        const { data: opp } = await this.db
-          .from('opportunity')
-          .insert({
-            team_id: teamId,
-            stage: OpportunityStage.Discovered,
-            company_name: job.company_name,
-            job_title: job.job_title,
-            location_label: job.location_label,
-            job_description_url: job.job_description_url,
-            job_description_text: job.job_description_text,
-            source_platform_id: platform.id as string,
-            external_ref: job.external_ref,
-            source_freshness: 'new',
-          })
-          .select('id')
-          .single();
+    await this.emitEvent(teamId, 'platform_search_started', `岗位研究员开始搜索 Lever（${companies.length} 个公司）`);
 
-        if (opp) await this.runScreeningPipeline(teamId, opp.id, pipelineMode);
+    let totalFound = 0;
+    for (const slug of companies) {
+      try {
+        const jobs = await discoverLeverJobs(slug, slug, { limit: 10 });
+        console.log(`[pipeline] lever/${slug}: ${jobs.length} jobs`);
+        totalFound += jobs.length;
+        for (const job of jobs) {
+          if (await this.isDuplicate(teamId, job)) continue;
+          const { data: opp } = await this.db
+            .from('opportunity')
+            .insert({
+              team_id: teamId, stage: OpportunityStage.Discovered,
+              company_name: job.company_name, job_title: job.job_title,
+              location_label: job.location_label, job_description_url: job.job_description_url,
+              job_description_text: job.job_description_text,
+              source_platform_id: platform.id as string, external_ref: job.external_ref,
+              source_freshness: 'new',
+            }).select('id').single();
+          if (opp) await this.runScreeningPipeline(teamId, opp.id, pipelineMode);
+        }
+      } catch (e) {
+        console.log(`[lever] Slug "${slug}" error — skipping: ${(e as Error).message.slice(0, 80)}`);
       }
     }
+    await this.emitEvent(teamId, 'platform_search_completed', `岗位研究员在 Lever 搜索完成，发现 ${totalFound} 个岗位`);
   }
 
   private async runLinkedInDiscovery(teamId: string, platform: Record<string, unknown>, pipelineMode: string): Promise<void> {
-    // Get session cookies
-    const { data: conn } = await this.db
+    const conn$ = await this.db
       .from('platform_connection')
       .select('session_token_ref')
       .eq('team_id', teamId)
       .eq('platform_id', platform.id as string)
       .eq('status', 'active')
       .single();
+    if (!conn$?.data?.session_token_ref) return;
 
-    if (!conn?.session_token_ref) return;
+    const keywords = await this.getSearchKeywords(teamId);
+    if (!keywords || keywords.en_keywords.length === 0) return;
 
-    // Get user's target roles for keywords
-    const { data: prefs } = await this.db
-      .from('user_preferences')
-      .select('preferred_locations')
-      .eq('team_id', teamId)
-      .single();
-
-    const { data: teamUser } = await this.db.from('team').select('user_id').eq('id', teamId).single();
-    const { data: draft } = await this.db
-      .from('onboarding_draft')
-      .select('answered_fields')
-      .eq('user_id', teamUser?.user_id)
-      .single();
-
-    const answeredFields = (draft?.answered_fields as Record<string, unknown>) || {};
-    const rawRoles = answeredFields.target_roles;
-    const keywords: string[] = Array.isArray(rawRoles) ? rawRoles
-      : typeof rawRoles === 'string' ? rawRoles.split(',').map((k: string) => k.trim()).filter(Boolean)
-      : ['software engineer'];
-    const locations = (answeredFields.target_locations as string) || (prefs?.preferred_locations as string) || '';
-    const locationFirst = locations.split(',')[0]?.trim() || undefined;
+    // Pick 3 keywords per cycle (rotate)
+    const searchTerms = keywords.en_keywords.sort(() => Math.random() - 0.5).slice(0, 3);
+    console.log(`[pipeline] linkedin: AI keywords=${searchTerms.join(', ')}`);
+    await this.emitEvent(teamId, 'platform_search_started', `岗位研究员开始搜索 LinkedIn: ${searchTerms.join(', ')}`);
 
     const jobs = await discoverLinkedInJobs({
-      sessionCookies: conn.session_token_ref,
-      keywords,
-      location: locationFirst,
+      sessionCookies: conn$.data.session_token_ref,
+      keywords: searchTerms,
       limit: 10,
     });
 
+    let created = 0;
     for (const job of jobs) {
-      const { count } = await this.db
-        .from('opportunity')
-        .select('id', { count: 'exact', head: true })
-        .eq('team_id', teamId)
-        .eq('external_ref', job.external_ref);
-      if (count && count > 0) continue;
-
+      if (await this.isDuplicate(teamId, job)) continue;
       const { data: opp } = await this.db
         .from('opportunity')
         .insert({
-          team_id: teamId,
-          stage: OpportunityStage.Discovered,
-          company_name: job.company_name,
-          job_title: job.job_title,
-          location_label: job.location_label,
-          job_description_url: job.job_description_url,
+          team_id: teamId, stage: OpportunityStage.Discovered,
+          company_name: job.company_name, job_title: job.job_title,
+          location_label: job.location_label, job_description_url: job.job_description_url,
           job_description_text: job.job_description_text,
-          source_platform_id: platform.id as string,
-          external_ref: job.external_ref,
+          source_platform_id: platform.id as string, external_ref: job.external_ref,
           source_freshness: 'new',
-        })
-        .select('id')
-        .single();
-
-      if (opp) await this.runScreeningPipeline(teamId, opp.id, pipelineMode);
+        }).select('id').single();
+      if (opp) { await this.runScreeningPipeline(teamId, opp.id, pipelineMode); created++; }
     }
+    await this.emitEvent(teamId, 'platform_search_completed', `岗位研究员在 LinkedIn 搜索「${searchTerms[0]}」等，发现 ${created} 个新岗位`);
   }
 
   private async runChinaPlatformDiscovery(
@@ -388,16 +435,14 @@ export class PipelineOrchestrator {
 
     if (!conn?.session_token_ref) return;
 
-    // Get keywords from onboarding answers
-    const { data: team } = await this.db.from('team').select('user_id').eq('id', teamId).single();
-    const { data: draft } = await this.db
-      .from('onboarding_draft')
-      .select('answered_fields')
-      .eq('user_id', team?.user_id)
-      .single();
+    // Use AI-generated Chinese keywords
+    const searchKw = await this.getSearchKeywords(teamId);
+    if (!searchKw || searchKw.zh_keywords.length === 0) return;
 
-    const keywords = ((draft?.answered_fields as Record<string, unknown>)?.target_roles as string) || '软件工程师';
-    const keywordList = typeof keywords === 'string' ? keywords.split(',').map((k: string) => k.trim()) : [keywords];
+    // Rotate: pick 3 keywords per cycle
+    const keywordList = searchKw.zh_keywords.sort(() => Math.random() - 0.5).slice(0, 3);
+    console.log(`[pipeline] ${platformCode}: AI keywords=${keywordList.join(',')}`);
+    await this.emitEvent(teamId, 'platform_search_started', `岗位研究员开始搜索${platformCode === 'zhaopin' ? '智联招聘' : platformCode === 'lagou' ? '拉勾' : '猎聘'}: ${keywordList.join('、')}`);
 
     let jobs: Array<{ job_title: string; company_name: string; location_label: string; job_description_url: string; job_description_text: string; external_ref: string }> = [];
 
@@ -410,12 +455,7 @@ export class PipelineOrchestrator {
     }
 
     for (const job of jobs) {
-      const { count } = await this.db
-        .from('opportunity')
-        .select('id', { count: 'exact', head: true })
-        .eq('team_id', teamId)
-        .eq('external_ref', job.external_ref);
-      if (count && count > 0) continue;
+      if (await this.isDuplicate(teamId, job)) continue;
 
       const { data: opp } = await this.db
         .from('opportunity')
@@ -437,6 +477,8 @@ export class PipelineOrchestrator {
       // Passthrough pipeline: screen → submit directly (no materials)
       if (opp) await this.runScreeningPipeline(teamId, opp.id, pipelineMode);
     }
+    const platformZh = platformCode === 'zhaopin' ? '智联招聘' : platformCode === 'lagou' ? '拉勾' : '猎聘';
+    await this.emitEvent(teamId, 'platform_search_completed', `岗位研究员在${platformZh}搜索「${keywordList[0]}」等，发现 ${jobs.length} 个岗位`);
   }
 
   /**
@@ -459,26 +501,18 @@ export class PipelineOrchestrator {
 
     if (!conn?.session_token_ref) return;
 
-    // Get keywords from onboarding
-    const { data: team } = await this.db.from('team').select('user_id').eq('id', teamId).single();
-    const { data: draft } = await this.db
-      .from('onboarding_draft')
-      .select('answered_fields')
-      .eq('user_id', team?.user_id)
-      .single();
+    // Use AI-generated Chinese keywords
+    const searchKw = await this.getSearchKeywords(teamId);
+    if (!searchKw || searchKw.zh_keywords.length === 0) return;
 
-    const keywords = ((draft?.answered_fields as Record<string, unknown>)?.target_roles as string) || '软件工程师';
-    const keywordList = typeof keywords === 'string' ? keywords.split(',').map((k: string) => k.trim()) : [keywords];
+    const keywordList = searchKw.zh_keywords.sort(() => Math.random() - 0.5).slice(0, 3);
+    console.log(`[pipeline] boss_zhipin: AI keywords=${keywordList.join(',')}`);
+    await this.emitEvent(teamId, 'platform_search_started', `岗位研究员开始搜索 Boss直聘: ${keywordList.join('、')}`);
 
     const jobs = await discoverBossJobs({ sessionCookies: conn.session_token_ref, keywords: keywordList, limit: 10 });
 
     for (const job of jobs) {
-      const { count } = await this.db
-        .from('opportunity')
-        .select('id', { count: 'exact', head: true })
-        .eq('team_id', teamId)
-        .eq('external_ref', job.external_ref);
-      if (count && count > 0) continue;
+      if (await this.isDuplicate(teamId, job)) continue;
 
       const { data: opp } = await this.db
         .from('opportunity')
@@ -500,6 +534,7 @@ export class PipelineOrchestrator {
       // Boss pipeline: screen → greeting (not submit)
       if (opp) await this.runBossScreeningPipeline(teamId, opp.id, platform.id as string);
     }
+    await this.emitEvent(teamId, 'platform_search_completed', `岗位研究员在 Boss直聘 搜索「${keywordList[0]}」等，发现 ${jobs.length} 个岗位`);
   }
 
   /**
@@ -921,10 +956,14 @@ export class PipelineOrchestrator {
 
     // Get resume file info — resume_asset uses user_id, not team_id
     const { data: teamForUser } = await this.db.from('team').select('user_id').eq('id', teamId).single();
+    if (!teamForUser?.user_id) {
+      console.error(`[pipeline] Cannot find user_id for team ${teamId}`);
+      return;
+    }
     const { data: resumeAsset } = await this.db
       .from('resume_asset')
       .select('storage_path, file_name')
-      .eq('user_id', teamForUser?.user_id)
+      .eq('user_id', teamForUser.user_id)
       .eq('is_primary', true)
       .single();
 
@@ -943,7 +982,23 @@ export class PipelineOrchestrator {
     // Download resume to temp file for Playwright upload
     let resumeLocalPath = '';
     if (resumeAsset) {
-      resumeLocalPath = await downloadResumeToTemp(this.db, resumeAsset.storage_path, resumeAsset.file_name);
+      try {
+        resumeLocalPath = await downloadResumeToTemp(this.db, resumeAsset.storage_path, resumeAsset.file_name);
+      } catch (dlErr) {
+        console.error(`[pipeline] Resume download failed: ${dlErr instanceof Error ? dlErr.message : dlErr}`);
+        return; // Cannot submit without resume
+      }
+    }
+
+    // Parse cover letter: content_text is JSON string, extract full_text
+    let coverLetterText: string | undefined;
+    if (coverLetterMat?.content_text) {
+      try {
+        const parsed = JSON.parse(coverLetterMat.content_text);
+        coverLetterText = parsed.full_text || parsed.text || coverLetterMat.content_text;
+      } catch {
+        coverLetterText = coverLetterMat.content_text; // fallback to raw text
+      }
     }
 
     try {
@@ -959,7 +1014,7 @@ export class PipelineOrchestrator {
             applicantEmail: (profile?.contact_email as string) || (baseline?.contact_email as string) || '',
             applicantPhone: (profile?.phone as string) || (baseline?.contact_phone as string) || '',
             resumeLocalPath,
-            coverLetterText: coverLetterMat?.content_text || undefined,
+            coverLetterText,
           });
           break;
 
@@ -969,7 +1024,7 @@ export class PipelineOrchestrator {
             applicantName: (baseline?.full_name as string) || 'Unknown',
             applicantEmail: (profile?.contact_email as string) || (baseline?.contact_email as string) || '',
             resumeLocalPath,
-            coverLetterText: coverLetterMat?.content_text || undefined,
+            coverLetterText,
           });
           break;
 

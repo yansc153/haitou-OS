@@ -24,7 +24,6 @@ export default function OnboardingPage() {
   const [cities, setCities] = useState<string[]>([]);
   const [workMode, setWorkMode] = useState('hybrid');
   const [strategy, setStrategy] = useState('balanced');
-  const [targetRoles, setTargetRoles] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const router = useRouter();
@@ -44,36 +43,44 @@ export default function OnboardingPage() {
       const session = await getValidSession(supabase);
       if (!session || !file) { setError('请先登录并上传简历'); setSubmitting(false); return; }
 
-      // Step 1: Upload resume
+      // Step 1: Upload + parse resume
+      setError('');
       const formData = new FormData();
       formData.append('file', file);
       const r1 = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/onboarding-resume`, {
         method: 'POST', headers: { Authorization: `Bearer ${session.access_token}` }, body: formData,
       });
+      const j1 = await r1.json().catch(() => ({}));
+      console.log('[onboarding] Step 1 resume:', r1.status, j1);
       if (!r1.ok) {
-        const j = await r1.json().catch(() => ({}));
-        setError(`简历上传失败: ${j.error?.message || r1.status}`); setSubmitting(false); return;
+        setError(`简历上传失败: ${j1.error?.message || r1.status}`); setSubmitting(false); return;
+      }
+      if (j1.data?.status === 'parse_failed') {
+        // Don't block onboarding — LLM parsing can be retried later by the worker.
+        // Just log a warning and continue.
+        console.warn('[onboarding] Resume parse failed (will retry later):', j1.data.error);
       }
 
       // Step 2: Save answers
       const r2 = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/onboarding-draft`, {
         method: 'PATCH',
         headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ answers: { target_roles: targetRoles, target_locations: cities.join(','), work_mode: workMode, strategy_mode: strategy, coverage_scope: 'cross_market' } }),
+        body: JSON.stringify({ answers: { target_locations: cities.join(','), work_mode: workMode, strategy_mode: strategy, coverage_scope: 'cross_market' } }),
       });
       if (!r2.ok) {
         const j = await r2.json().catch(() => ({}));
         setError(`保存偏好失败: ${j.error?.message || r2.status}`); setSubmitting(false); return;
       }
 
-      // Step 3: Complete onboarding → create team
+      // Step 3: Complete onboarding → create/update team + profile_baseline
       const r3 = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/onboarding-complete`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
       });
+      const j3 = await r3.json().catch(() => ({}));
+      console.log('[onboarding] Step 3 complete:', r3.status, j3);
       if (!r3.ok) {
-        const j = await r3.json().catch(() => ({}));
-        setError(`创建团队失败: ${j.error?.message || r3.status}`); setSubmitting(false); return;
+        setError(`创建团队失败: ${j3.error?.message || r3.status}`); setSubmitting(false); return;
       }
 
       router.push('/home');
@@ -124,34 +131,20 @@ export default function OnboardingPage() {
                     <input type="file" className="hidden" accept=".pdf,.doc,.docx" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
                   </label>
                 ) : (
-                  <div>
+                  <label className="cursor-pointer">
                     <div className="w-14 h-14 rounded-full bg-status-active/10 flex items-center justify-center mx-auto mb-3">
                       <span className="text-2xl text-status-active">✓</span>
                     </div>
                     <p className="text-lg font-bold text-status-active">{file?.name}</p>
-                    <p className="text-sm text-muted-foreground mt-1">简历已就绪</p>
-                  </div>
+                    <p className="text-sm text-muted-foreground mt-1">简历已就绪 · 点击更换</p>
+                    <input type="file" className="hidden" accept=".pdf,.doc,.docx" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
+                  </label>
                 )}
               </div>
             </div>
           </AnimatedContent>
 
-          {/* Section 2: Target Roles */}
-          <AnimatedContent delay={0.08}>
-            <div>
-              <h2 className="text-2xl font-display font-bold mb-2">目标岗位</h2>
-              <p className="text-sm text-muted-foreground mb-5">你想找什么类型的工作？</p>
-              <input
-                type="text"
-                placeholder="例如：后端工程师, 产品经理, 数据分析师"
-                value={targetRoles}
-                onChange={(e) => setTargetRoles(e.target.value)}
-                className="w-full px-5 py-3.5 text-base bg-surface-low rounded-xl border-0 focus:outline-none focus:ring-2 focus:ring-secondary"
-              />
-            </div>
-          </AnimatedContent>
-
-          {/* Section 3: Location + Work Mode — side by side */}
+          {/* Section 2: Location + Work Mode — side by side */}
           <AnimatedContent delay={0.1}>
             <div className="grid grid-cols-2 gap-8">
               <div>
@@ -234,12 +227,6 @@ export default function OnboardingPage() {
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">目标岗位</span>
-                  <span className={`text-sm ${targetRoles.trim() ? 'font-bold' : 'text-muted-foreground/40'}`}>
-                    {targetRoles.trim() ? '已填写' : '未填写'}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
                   <span className="text-sm text-muted-foreground">目标城市</span>
                   <span className={`text-sm ${cities.length > 0 ? 'font-bold' : 'text-muted-foreground/40'}`}>
                     {cities.length > 0 ? `${cities.length} 个城市` : '未选择'}
@@ -259,7 +246,7 @@ export default function OnboardingPage() {
               {/* Submit */}
               <button
                 onClick={handleSubmit}
-                disabled={uploadState !== 'done' || !targetRoles.trim() || submitting}
+                disabled={uploadState !== 'done' || submitting}
                 className="w-full py-3.5 bg-foreground text-background rounded-xl text-base font-bold hover:opacity-90 transition-opacity disabled:opacity-30"
               >
                 {submitting ? '正在配置...' : '完成配置 →'}

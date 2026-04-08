@@ -104,7 +104,7 @@ export default function SettingsPage() {
       const res = await apiFetch('settings-update', token, {
         method: 'POST',
         body: JSON.stringify({
-          preferences: { strategy_mode: strategy, coverage_scope: scope },
+          preferences: { strategy_mode: strategy, coverage_scope: scope, work_mode: workMode },
           submission_profile: {
             phone,
             contact_email: contactEmail,

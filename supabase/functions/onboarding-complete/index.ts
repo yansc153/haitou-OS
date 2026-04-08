@@ -59,7 +59,103 @@ serve(async (req) => {
     .single();
 
   if (existingTeam) {
-    return ok({ team_id: existingTeam.id, already_exists: true });
+    // Team exists — ensure all dependent entities exist (idempotent repair)
+    const parsedProfile = (draft.answered_fields as Record<string, unknown>)?._parsed_profile as Record<string, unknown> | null;
+    if (parsedProfile && Object.keys(parsedProfile).length > 3) {
+      await serviceClient.from('profile_baseline').update({
+        full_name: parsedProfile.full_name || null,
+        contact_email: parsedProfile.contact_email || null,
+        contact_phone: parsedProfile.contact_phone || null,
+        current_location: parsedProfile.current_location || null,
+        years_of_experience: parsedProfile.years_of_experience || null,
+        seniority_level: parsedProfile.seniority_level || null,
+        primary_domain: parsedProfile.primary_domain || null,
+        headline_summary: parsedProfile.headline_summary || null,
+        experiences: parsedProfile.experiences || [],
+        education: parsedProfile.education || [],
+        skills: parsedProfile.skills || [],
+        languages: parsedProfile.languages || [],
+        certifications: parsedProfile.certifications || [],
+        inferred_role_directions: parsedProfile.inferred_role_directions || [],
+        capability_tags: parsedProfile.capability_tags || [],
+        capability_gaps: parsedProfile.capability_gaps || [],
+        source_language: parsedProfile.source_language || 'en',
+        parse_confidence: parsedProfile.parse_confidence || 'medium',
+        search_keywords: null, // Force keyword regeneration
+        updated_at: new Date().toISOString(),
+      }).eq('team_id', existingTeam.id);
+    }
+
+    // Ensure agents exist (repair if previous run partially failed)
+    const { count: agentCount } = await serviceClient
+      .from('agent_instance')
+      .select('id', { count: 'exact', head: true })
+      .eq('team_id', existingTeam.id);
+
+    if (!agentCount || agentCount < 7) {
+      // Delete partial agents and recreate all 7
+      await serviceClient.from('agent_instance').delete().eq('team_id', existingTeam.id);
+      await serviceClient.from('agent_instance').insert(AGENT_ROSTER.map((agent) => ({
+        team_id: existingTeam.id,
+        template_role_code: agent.role_code,
+        role_title_zh: agent.title_zh,
+        persona_name: agent.persona,
+        lifecycle_state: 'initialized',
+        runtime_state: 'ready',
+        last_active_at: new Date().toISOString(),
+      })));
+    }
+
+    // Ensure profile_baseline exists
+    const { data: baseline } = await serviceClient
+      .from('profile_baseline')
+      .select('id')
+      .eq('team_id', existingTeam.id)
+      .single();
+
+    if (!baseline) {
+      const pp = parsedProfile || {};
+      await serviceClient.from('profile_baseline').insert({
+        user_id: user!.id,
+        team_id: existingTeam.id,
+        resume_asset_id: draft.resume_asset_id,
+        version: 1,
+        full_name: pp.full_name ?? user!.user_metadata?.full_name ?? null,
+        contact_email: pp.contact_email ?? user!.email,
+        skills: pp.skills ?? [],
+        experiences: pp.experiences ?? [],
+        education: pp.education ?? [],
+        inferred_role_directions: pp.inferred_role_directions ?? [],
+        source_language: pp.source_language ?? 'en',
+        parse_confidence: pp.parse_confidence ?? 'low',
+      });
+    }
+
+    // Ensure submission_profile exists
+    const { data: subProfile } = await serviceClient
+      .from('submission_profile')
+      .select('id')
+      .eq('team_id', existingTeam.id)
+      .single();
+
+    if (!subProfile) {
+      const pp = parsedProfile || {};
+      await serviceClient.from('submission_profile').insert({
+        user_id: user!.id,
+        team_id: existingTeam.id,
+        contact_email: pp.contact_email ?? user!.email,
+        phone: pp.contact_phone ?? null,
+        current_city: pp.current_location ?? null,
+        completion_band: 'partial',
+      });
+    }
+
+    // Mark draft completed
+    await serviceClient.from('onboarding_draft')
+      .update({ team_id: existingTeam.id, status: 'completed' })
+      .eq('id', draft.id);
+
+    return ok({ team_id: existingTeam.id, already_exists: true, profile_updated: !!parsedProfile, repaired: true });
   }
 
   // ── Step 1: Create team (status=active from the start) ──

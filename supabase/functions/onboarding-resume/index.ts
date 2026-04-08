@@ -245,7 +245,7 @@ serve(async (req) => {
         resume_parse_error_code: 'PARSE_FAILED',
         resume_parse_error_message: (sections.summary_text as string) || 'Resume content could not be extracted',
       }).eq('user_id', user!.id);
-      return ok({ resume_asset_id: asset.id, status: 'parse_failed', error: sections.summary_text });
+      return err(422, 'RESUME_PARSE_FAILED', (sections.summary_text as string) || '简历内容无法提取，请确认文件不是扫描版或图片版 PDF');
     }
 
     // 7. Step 2: profile-extraction (Tier4 Haiku)

@@ -109,7 +109,7 @@ export const validateOpportunityTransition = (
 // --- Handoff State ---
 
 export const validateHandoffTransition = makeValidator<HandoffState>('Handoff', {
-  [HandoffState.AwaitingTakeover]: [HandoffState.InUserHandling],
+  [HandoffState.AwaitingTakeover]: [HandoffState.InUserHandling, HandoffState.WaitingExternal],
   [HandoffState.InUserHandling]: [
     HandoffState.WaitingExternal,
     HandoffState.Resolved,

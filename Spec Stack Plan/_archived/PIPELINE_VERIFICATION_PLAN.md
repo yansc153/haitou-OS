@@ -337,5 +337,116 @@ AI 质量:             ___/7 合格
 - **验证**: 平台中心 → 所有平台"已连接" → 等 2 分钟 → 机会中心出现中文岗位
 
 ### ⚠️ Greenhouse/Lever board tokens
-- **症状**: 404 错误（已修复，Worker v10 部署了新 pipeline.ts）
-- **验证**: 机会中心 → 看到新的 Stripe/Airbnb/Datadog 岗位（不是 2 小时前的旧的）
+- **症状**: 404 错误（已修复，Worker v16 部署了新 pipeline.ts）
+- **验证**: 机会中心 → 看到新的 Stripe/Airbnb/Datadog 岗位（不是旧的）
+
+---
+
+## 八、V1 Issue 修复验证清单 (本轮新增)
+
+> 以下 12 项对应 V1_ISSUE_TRACKER.md 的 12 个 Issue。
+> 每项标注验证方法和通过标准。
+
+### Phase C: 7 平台 Discovery 路由 (Issue #1, #2, #3, #10)
+
+| # | 在哪看 | 看什么 | 通过标准 | 对应 Issue |
+|---|--------|--------|---------|-----------|
+| C1 | 机会中心 | Greenhouse 岗位 | 有 Stripe/Notion 等岗位 | 基线 |
+| C2 | 机会中心 | Lever 岗位 | 有 Netflix/Spotify/Toptal 等岗位 | #3 |
+| C3 | 机会中心 | LinkedIn 岗位 | 有 LinkedIn 岗位 + JD 不为空 | #2 |
+| C4 | 机会中心 → LinkedIn 岗位 | JD 文本 | 展开后有可读的岗位描述，不是空白 | #2 |
+| C5 | 机会中心 | 智联/拉勾/猎聘 岗位 | 有中文岗位（需 cookie 连接） | #12 |
+| C6 | 机会中心 | Boss直聘 岗位 | 有 Boss 岗位（需 cookie 连接） | #1 |
+| C7 | 机会中心 → Boss 岗位 | 阶段标签 | "已联系" 而不是 "已投递" | #1 |
+
+### Phase D: 前端 UX 修复 (Issue #4, #6, #7, #8, #9)
+
+| # | 在哪看 | 看什么 | 通过标准 | 对应 Issue |
+|---|--------|--------|---------|-----------|
+| D1 | 首页 → "查看全部日志 →" | 点击后跳转 | 跳到 /opportunities 不是 /review | #6 |
+| D2 | 首页 → 今日运营 | AI 调用次数 | > 0（pipeline 跑过之后） | #7 |
+| D3 | 首页 → 实时动态 | 事件文本 | 全部中文，没有英文 summary | #8 |
+| D4 | 首页 → 实时动态 | Boss 事件 | 显示 "打招呼成功" 不是 "boss_greeting_sent" | #8 |
+| D5 | 机会中心 → GH/Lever 岗位 | 简历对比 tab | 有 "简历对比" tab + 左右两栏 | #4 |
+| D6 | 机会中心 → 中文岗位 | 简历对比 tab | 没有 "简历对比" tab（passthrough 不生成材料） | #4 |
+| D7 | 刷新首页 | 主题弹窗 | 不自动弹出，只有点右下角圆点才出 | #9 |
+
+### Phase E: 实时动态 + Loop 2 (Issue #5, #11)
+
+| # | 在哪看 | 看什么 | 通过标准 | 对应 Issue |
+|---|--------|--------|---------|-----------|
+| E1 | 首页（不刷新） | 新事件 | 启动团队后 30s 内自动出现新事件 | #5 |
+| E2 | 首页 → 实时动态 | "已向 XX 发送打招呼消息" | Boss 打招呼事件出现 | #11 |
+| E3 | 机会中心 → Boss 岗位 | 阶段流转 | prioritized → contact_started | #11 |
+| E4 | 交接中心 | 交接列表 | Boss 检测到面试信号后出现交接项 | #11 |
+
+### Phase F: Budget + Token (Issue #7)
+
+| # | 在哪看 | 看什么 | 通过标准 | 对应 Issue |
+|---|--------|--------|---------|-----------|
+| F1 | 首页 → 今日运营 | AI 调用次数 | screening=3 + material=2 → 数字合理 | #7 |
+| F2 | DB: team 表 | total_llm_calls | > 0（pipeline 跑过之后） | #7 |
+
+---
+
+### 验证结果模板 (V1 Issue 修复)
+
+```
+=== V1 Issue 修复验证 ===
+
+Phase C (7平台 Discovery):   ___/7 通过
+Phase D (前端 UX):           ___/7 通过
+Phase E (实时 + Loop 2):     ___/4 通过
+Phase F (Budget + Token):    ___/2 通过
+
+总计: ___/20 通过
+
+=== 未通过项 ===
+- [ ] C/D/E/F ___: 看不到 ___
+  截图: ___
+  根因: ___
+```
+
+---
+
+## 九、2026-04-07 验收发现的新问题 (Phase G)
+
+> 来源: 全量 MCP Playwright 验收 + 用户反馈
+> 修复状态追踪
+
+### Phase G: 新发现问题
+
+| # | 问题 | 严重度 | 根因 | 修复状态 |
+|---|------|--------|------|---------|
+| G1 | 岗位重复（Datadog/Spotify/八六三等出现2次） | 高 | pipeline dedup 只查 external_ref，同岗位不同 posting ID 绕过检查 | ✅ 已修复 — isDuplicate 加 company+title 二级去重 |
+| G2 | 简历对比视图不显示 | 高 | 代码完整，但无岗位进入 advance 阶段（全部弱匹配）→ material pipeline 未运行 | ⚠️ 非代码 Bug — profile_baseline 缺数据导致 AI 判断弱匹配 |
+| G3 | AI 评估理由全英文 | 中 | skill prompt 输出英文 tags，前端直接渲染 | ✅ 已修复 — 前端加 REASON_TAG_ZH 映射 |
+| G4 | 活动回顾阶段名英文 | 中 | 后端返回 stage enum，前端无翻译 | ✅ 已修复 — 前端加 STAGE_ZH 映射 |
+| G5 | 实时动态只有 discovery 事件 | 低 | screening 事件存在但 19h 前，被频繁 discovery 事件推到底部 | ⚠️ 事件密度问题 — discovery 空跑不应插入事件 |
+| G6 | 首页数据更新慢 | 中 | Realtime 订阅正常，但 pipeline 每 2min 跑一次 discovery → 新数据间隔 2min | ⚠️ 设计如此 — dispatch-loop 间隔可调 |
+| G7 | 扩展无法读取 LinkedIn cookie | 高 | keyCookies 要求 JSESSIONID 但 LinkedIn 已弃用 | ✅ 已修复 — 只要求 li_at |
+| G8 | 扩展连接 Boss 闪退 | 高 | 登录 URL 触发安全验证 + 旧 loginAndCapture 逻辑缺陷 | ✅ 已修复 — 前端先 getCookies 再决定是否开页面 |
+| G9 | Greenhouse/notion 404 | 低 | Notion 可能不用 Greenhouse 了 | ⏳ 需更新 board list |
+| G10 | 中文岗位 JD 为空 | 中 | 中文平台 executor 只抓列表页不抓详情页 | ⏳ 待修复 — executor 需加详情页 JD 抓取 |
+
+### G2 详细说明：简历对比为什么不显示
+
+```
+Pipeline 流程:
+  Discovery → Screening → [advance] → Material Generation → Submission
+                           ↑
+                     当前卡在这里
+
+原因: screening 的 fit-evaluation skill 输出:
+  fit_posture: "weak_fit"
+  reason: "Profile baseline contains no experience or skills data"
+
+→ recommendation: "watch" (持续观望)
+→ 不进入 advance 阶段
+→ material pipeline 不运行
+→ 简历对比无数据
+
+解决方案:
+  用户需要完善 profile_baseline（上传简历 + 填写工作经历）
+  OR 临时将 screening strategy 改为 broad（更宽松的投递策略）
+```

@@ -93,7 +93,24 @@ type PlatformEntry = {
   platform_id: string; code: string; display_name: string; display_name_zh: string;
   pipeline_mode: string; anti_scraping_level: string; min_plan_tier: string;
   connection_id: string | null; connection_status: string; capability_status: Record<string, string> | null;
+  session_expires_at: string | null; session_granted_at: string | null;
+  failure_reason: string | null;
 };
+
+function getExpiryWarning(p: PlatformEntry): { expiring: boolean; remainingMinutes: number } {
+  if (p.connection_status !== 'active' || !p.session_expires_at || !p.session_granted_at) {
+    return { expiring: false, remainingMinutes: 0 };
+  }
+  const expires = new Date(p.session_expires_at).getTime();
+  const granted = new Date(p.session_granted_at).getTime();
+  const now = Date.now();
+  const totalTTL = expires - granted;
+  const remaining = expires - now;
+  return {
+    expiring: remaining > 0 && remaining < totalTTL * 0.2,
+    remainingMinutes: Math.max(0, Math.round(remaining / (1000 * 60))),
+  };
+}
 
 const EMPTY_PLATFORMS: { global_english: PlatformEntry[]; china: PlatformEntry[] } = {
   global_english: [],
@@ -107,6 +124,7 @@ export default function PlatformsPage() {
   const [groups, setGroups] = useState<{ global_english: PlatformEntry[]; china: PlatformEntry[] }>(EMPTY_PLATFORMS);
   const [bridgeInstalled, setBridgeInstalled] = useState<boolean | null>(null);
   const [connecting, setConnecting] = useState<string | null>(null);
+  const [connectingState, setConnectingState] = useState<Record<string, string>>({});
   const [showInstallGuide, setShowInstallGuide] = useState(false);
   const supabase = useMemo(() => createClient(), []);
 
@@ -132,10 +150,9 @@ export default function PlatformsPage() {
 
   const connectPlatform = useCallback(async (platformCode: string) => {
     setConnecting(platformCode);
+    setConnectingState(s => ({ ...s, [platformCode]: '准备中...' }));
     try {
-      // Force token refresh to avoid stale JWT
       const { data: { session }, error: sessionErr } = await supabase.auth.refreshSession();
-      console.log('[connect] session refresh:', sessionErr ? `ERROR: ${sessionErr.message}` : `OK, token: ${session?.access_token?.slice(0, 20)}...`);
       if (sessionErr || !session) {
         alert('登录已过期，请重新登录');
         return;
@@ -159,23 +176,52 @@ export default function PlatformsPage() {
         return;
       }
 
-      // Cookie-based platforms: use Bridge extension
-      let result = await sendBridgeMessage({ action: 'getCookies', platform: platformCode });
+      // Step 0: Check extension version
+      const versionCheck = await sendBridgeMessage({ action: 'checkInstalled' });
+      const extVersion = (versionCheck as { bridgeVersion?: string }).bridgeVersion || '未知';
 
-      if (!result.cookies && result.needsLogin) {
-        result = await sendBridgeMessage({ action: 'loginAndCapture', platform: platformCode });
-      }
+      // Cookie-based platforms:
+      // Step 1: Read cookies from browser
+      setConnectingState(s => ({ ...s, [platformCode]: '[1/3] 读取浏览器 Cookie...' }));
+      const cookieCheck = await sendBridgeMessage({ action: 'getCookies', platform: platformCode });
+      const debug = (cookieCheck as { debug?: Record<string, unknown> }).debug;
 
-      if (result.error) {
-        alert(`连接失败: ${result.error}`);
+      let cookies: string | null = null;
+
+      if (cookieCheck.cookies) {
+        cookies = cookieCheck.cookies as string;
+        const parsed = JSON.parse(cookies);
+        setConnectingState(s => ({ ...s, [platformCode]: `[1/3] 找到 ${parsed.length} 个 Cookie ✓` }));
+      } else {
+        // Build detailed diagnostic message
+        const debugStr = debug
+          ? `\n\n诊断详情 (插件 v${extVersion}):\n` +
+            `各域名 Cookie 数: ${JSON.stringify(debug.domains || {})}\n` +
+            `原始总数: ${debug.totalRaw || 0}\n` +
+            `过滤后: ${debug.totalAfterFilter || 0}\n` +
+            `有效: ${debug.validCount ?? '?'}\n` +
+            (debug.missingKeyCookies ? `缺少关键Cookie: ${JSON.stringify(debug.missingKeyCookies)}\n` : '') +
+            (debug.allExpired ? '所有Cookie已过期\n' : '') +
+            (debug.keyCookiesFound ? `找到的关键Cookie: ${JSON.stringify(debug.keyCookiesFound)}` : '')
+          : `\n\n(插件版本: ${extVersion} — 无诊断数据，请重载插件到 v1.1.0)`;
+
+        alert(
+          `${platformCode} 连接诊断\n\n` +
+          `❌ 步骤1: 读取浏览器 Cookie 失败\n` +
+          `原因: ${cookieCheck.needsLogin ? '浏览器中未检测到登录信息' : cookieCheck.error || '未知'}` +
+          debugStr +
+          `\n\n解决方法:\n` +
+          `1. 在本浏览器中打开该平台网站，确认已登录\n` +
+          `2. chrome://extensions → 找到海投助手 → 点 🔄 刷新\n` +
+          `3. 确认插件版本变为 1.1.0（当前: ${extVersion}）\n` +
+          `4. 回到此页面重新点击连接`
+        );
         return;
       }
 
-      if (!result.cookies) {
-        alert('未检测到登录状态，请先在浏览器中登录该平台');
-        return;
-      }
-
+      // Step 2: Upload cookies to backend
+      setConnectingState(s => ({ ...s, [platformCode]: '[2/3] 上传凭据...' }));
+      console.log(`[connect] ${platformCode}: Step 2 — uploading cookies`);
       const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/platform-connect`, {
         method: 'POST',
         headers: {
@@ -185,19 +231,27 @@ export default function PlatformsPage() {
         },
         body: JSON.stringify({
           platform_code: platformCode,
-          session_token: result.cookies,
+          session_token: cookies,
           consent_scope: 'apply_and_message',
         }),
       });
 
-      if (res.ok) {
-        await reload();
-      } else {
+      if (!res.ok) {
         const json = await res.json();
-        alert(`连接失败: ${json.message || json.error?.message || JSON.stringify(json)}`);
+        const msg = json.message || json.error?.message || JSON.stringify(json);
+        console.error(`[connect] ${platformCode}: upload failed:`, json);
+        alert(`${platformCode} 连接诊断\n\n✓ 步骤1: Cookie 读取成功\n❌ 步骤2: 上传失败\n原因: ${msg}`);
+        return;
       }
+
+      // Step 3: Done
+      const connectJson = await res.json();
+      console.log(`[connect] ${platformCode}: Step 3 — success:`, connectJson);
+      setConnectingState(s => ({ ...s, [platformCode]: '[3/3] 连接成功 ✓' }));
+      await reload();
     } finally {
       setConnecting(null);
+      setConnectingState(s => { const n = { ...s }; delete n[platformCode]; return n; });
     }
   }, [supabase, reload]);
 
@@ -233,6 +287,7 @@ export default function PlatformsPage() {
           onConnect={connectPlatform}
           connecting={connecting}
           bridgeInstalled={bridgeInstalled}
+          connectingState={connectingState}
           onShowInstallGuide={() => setShowInstallGuide(true)}
         />
         <PlatformGroup
@@ -241,6 +296,7 @@ export default function PlatformsPage() {
           platforms={groups.china}
           onConnect={connectPlatform}
           connecting={connecting}
+          connectingState={connectingState}
           bridgeInstalled={bridgeInstalled}
           onShowInstallGuide={() => setShowInstallGuide(true)}
         />
@@ -249,9 +305,9 @@ export default function PlatformsPage() {
   );
 }
 
-function PlatformGroup({ title, subtitle, platforms, onConnect, connecting, bridgeInstalled, onShowInstallGuide }: {
+function PlatformGroup({ title, subtitle, platforms, onConnect, connecting, connectingState, bridgeInstalled, onShowInstallGuide }: {
   title: string; subtitle: string; platforms: PlatformEntry[];
-  onConnect: (code: string) => void; connecting: string | null; bridgeInstalled: boolean | null;
+  onConnect: (code: string) => void; connecting: string | null; connectingState: Record<string, string>; bridgeInstalled: boolean | null;
   onShowInstallGuide: () => void;
 }) {
   const supabase = useMemo(() => createClient(), []);
@@ -261,13 +317,14 @@ function PlatformGroup({ title, subtitle, platforms, onConnect, connecting, brid
       <p className="text-xs text-muted-foreground mb-5">{subtitle}</p>
       <div className="grid md:grid-cols-2 gap-5">
         {platforms.map((p, i) => {
+          const expiry = getExpiryWarning(p);
           const status = STATUS_STYLES[p.connection_status] || STATUS_STYLES.available_unconnected;
           const meta = PLATFORM_META[p.code] || { logo: '🌐', tagline: '', features: [], limits: '', needsPlugin: true };
           const isConnected = p.connection_status === 'active';
 
           return (
             <AnimatedContent key={p.platform_id} delay={i * 0.05}>
-              <SpotlightCard className={`surface-card p-0 overflow-hidden ${isConnected ? 'ring-1 ring-status-active/20' : ''}`}>
+              <SpotlightCard className={`surface-card p-0 overflow-hidden ${expiry.expiring ? 'ring-2 ring-status-warning/40' : isConnected ? 'ring-1 ring-status-active/20' : ''}`}>
                 {/* Header bar */}
                 <div className={`px-6 pt-5 pb-4 ${isConnected ? 'bg-status-active/5' : ''}`}>
                   <div className="flex items-start justify-between">
@@ -313,14 +370,24 @@ function PlatformGroup({ title, subtitle, platforms, onConnect, connecting, brid
                   {!meta.needsPlugin && !isConnected && (
                     <span className="text-[10px] text-status-active">无需插件 · 自动连接</span>
                   )}
-                  {isConnected && (
+                  {isConnected && !expiry.expiring && (
                     <span className="text-[10px] text-status-active">运行中</span>
+                  )}
+                  {isConnected && expiry.expiring && (
+                    <span className="text-[10px] text-status-warning font-bold">
+                      即将过期 · 剩余 {expiry.remainingMinutes} 分钟
+                    </span>
                   )}
                   {p.connection_status === 'plan_locked' && (
                     <span className="text-[10px] text-accent">需要升级套餐</span>
                   )}
                   {(p.connection_status === 'session_expired') && (
-                    <span className="text-[10px] text-status-warning">登录已过期</span>
+                    <div className="text-[10px] text-status-warning space-y-0.5">
+                      <span>登录已过期，请重新连接</span>
+                      {(p as unknown as { failure_reason?: string }).failure_reason && (
+                        <span className="block text-muted-foreground">{(p as unknown as { failure_reason?: string }).failure_reason}</span>
+                      )}
+                    </div>
                   )}
 
                   <div className="flex gap-2">
@@ -330,7 +397,7 @@ function PlatformGroup({ title, subtitle, platforms, onConnect, connecting, brid
                         disabled={connecting === p.code}
                         className="px-5 py-2 bg-foreground text-background rounded-lg text-xs font-bold hover:opacity-90 disabled:opacity-50"
                       >
-                        {connecting === p.code ? '连接中...' : '连接'}
+                        {connecting === p.code ? (connectingState[p.code] || '连接中...') : '连接'}
                       </button>
                     )}
                     {p.connection_status === 'session_expired' && (
@@ -339,7 +406,7 @@ function PlatformGroup({ title, subtitle, platforms, onConnect, connecting, brid
                         disabled={connecting === p.code}
                         className="px-5 py-2 bg-status-warning text-white rounded-lg text-xs font-bold hover:opacity-90 disabled:opacity-50"
                       >
-                        {connecting === p.code ? '重连中...' : '重新连接'}
+                        {connecting === p.code ? (connectingState[p.code] || '重连中...') : '重新连接'}
                       </button>
                     )}
                     {isConnected && p.connection_id && (

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "海投助手 Browser Bridge",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "一键连接求职平台 — 海投助手自动化求职的浏览器桥接组件",
   "permissions": [
     "cookies",

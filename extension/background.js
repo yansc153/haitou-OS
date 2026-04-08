@@ -1,68 +1,101 @@
 /**
- * Browser Bridge — Background Service Worker
+ * Browser Bridge v1.1.0 — Background Service Worker
  *
- * Handles messages from the web app via externally_connectable.
- * Three actions: checkInstalled, getCookies, loginAndCapture.
- *
- * Source: PLATFORM_RULE_AND_AGENT_SPEC.md § Cookie Extraction Methods
+ * Key change from v1.0.0:
+ * - LinkedIn: only require 'li_at' (removed JSESSIONID requirement)
+ * - All platforms: broader domain matching
+ * - getCookies returns debug info (raw cookie count per domain)
  */
 
 const PLATFORMS = {
   linkedin: {
-    domains: ['.linkedin.com'],
-    loginUrl: 'https://www.linkedin.com/login',
-    keyCookies: ['li_at', 'JSESSIONID'],
+    // Try multiple domain patterns
+    domains: ['.linkedin.com', 'www.linkedin.com', 'linkedin.com'],
+    keyCookies: ['li_at'], // Only require li_at — JSESSIONID may not exist anymore
   },
   zhaopin: {
-    domains: ['.zhaopin.com'],
-    loginUrl: 'https://www.zhaopin.com/',
-    keyCookies: null, // all cookies
+    domains: ['.zhaopin.com', 'www.zhaopin.com', 'sou.zhaopin.com'],
+    keyCookies: null,
   },
   lagou: {
-    domains: ['.lagou.com'],
-    loginUrl: 'https://www.lagou.com/',
+    domains: ['.lagou.com', 'www.lagou.com'],
     keyCookies: null,
   },
   boss_zhipin: {
-    domains: ['.zhipin.com'],
-    loginUrl: 'https://www.zhipin.com/web/user/?ka=header-login',
-    keyCookies: null, // all cookies — Boss changes cookie names frequently
+    // Boss uses multiple subdomains
+    domains: ['.zhipin.com', 'www.zhipin.com', 'login.zhipin.com'],
+    keyCookies: null,
   },
   liepin: {
-    domains: ['.liepin.com'],
-    loginUrl: 'https://www.liepin.com/',
+    domains: ['.liepin.com', 'www.liepin.com', 'c.liepin.com'],
     keyCookies: null,
   },
 };
 
 /**
- * Read cookies for a platform. Returns serialized array or null.
+ * Read ALL cookies for a platform. Returns { cookies: string|null, debug: object }.
  */
 async function readPlatformCookies(platformCode) {
   const platform = PLATFORMS[platformCode];
-  if (!platform) return null;
+  if (!platform) return { cookies: null, debug: { error: 'unknown platform' } };
 
+  const debug = { domains: {}, totalRaw: 0, totalAfterFilter: 0, keyCookiesFound: [] };
   const allCookies = [];
+  const seenKeys = new Set(); // dedupe across domains
+
   for (const domain of platform.domains) {
-    const cookies = await chrome.cookies.getAll({ domain });
-    if (platform.keyCookies) {
-      allCookies.push(...cookies.filter(c => platform.keyCookies.includes(c.name)));
-    } else {
-      allCookies.push(...cookies);
+    try {
+      const cookies = await chrome.cookies.getAll({ domain });
+      debug.domains[domain] = cookies.length;
+      debug.totalRaw += cookies.length;
+
+      for (const c of cookies) {
+        const key = `${c.domain}|${c.name}|${c.path}`;
+        if (seenKeys.has(key)) continue;
+        seenKeys.add(key);
+
+        if (platform.keyCookies) {
+          if (platform.keyCookies.includes(c.name)) {
+            allCookies.push(c);
+            debug.keyCookiesFound.push(c.name);
+          }
+        } else {
+          allCookies.push(c);
+        }
+      }
+    } catch (e) {
+      debug.domains[domain] = `error: ${e.message}`;
     }
   }
 
-  if (allCookies.length === 0) return null;
+  debug.totalAfterFilter = allCookies.length;
 
-  // Check key cookies exist (for platforms that require specific ones)
-  if (platform.keyCookies) {
-    const foundNames = new Set(allCookies.map(c => c.name));
-    const hasAllKeys = platform.keyCookies.every(k => foundNames.has(k));
-    if (!hasAllKeys) return null;
+  if (allCookies.length === 0) {
+    return { cookies: null, debug };
   }
 
-  return JSON.stringify(
-    allCookies.map(c => ({
+  // For platforms with key cookies, check required ones exist
+  if (platform.keyCookies) {
+    const foundNames = new Set(allCookies.map(c => c.name));
+    const missing = platform.keyCookies.filter(k => !foundNames.has(k));
+    if (missing.length > 0) {
+      debug.missingKeyCookies = missing;
+      return { cookies: null, debug };
+    }
+  }
+
+  // Filter out expired cookies
+  const now = Date.now() / 1000;
+  const validCookies = allCookies.filter(c => !c.expirationDate || c.expirationDate > now);
+  debug.validCount = validCookies.length;
+
+  if (validCookies.length === 0) {
+    debug.allExpired = true;
+    return { cookies: null, debug };
+  }
+
+  const serialized = JSON.stringify(
+    validCookies.map(c => ({
       name: c.name,
       value: c.value,
       domain: c.domain,
@@ -72,81 +105,23 @@ async function readPlatformCookies(platformCode) {
       expirationDate: c.expirationDate,
     }))
   );
+
+  return { cookies: serialized, debug };
 }
 
 /**
- * Open login page and monitor for cookie changes.
- * Resolves when key auth cookies appear.
- */
-function loginAndCapture(platformCode) {
-  return new Promise((resolve, reject) => {
-    const platform = PLATFORMS[platformCode];
-    if (!platform) {
-      reject(new Error(`Unknown platform: ${platformCode}`));
-      return;
-    }
-
-    let loginTabId = null;
-    let loginStartTime = Date.now();
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error('Login timeout (5 minutes)'));
-    }, 5 * 60 * 1000);
-
-    function cleanup() {
-      clearTimeout(timeout);
-      chrome.cookies.onChanged.removeListener(onCookieChanged);
-    }
-
-    async function onCookieChanged(changeInfo) {
-      // Only care about cookies being set (not removed)
-      if (changeInfo.removed) return;
-
-      const cookie = changeInfo.cookie;
-      // Check if this cookie belongs to our platform
-      const isOurDomain = platform.domains.some(d =>
-        cookie.domain === d || cookie.domain.endsWith(d)
-      );
-      if (!isOurDomain) return;
-
-      // For platforms with key cookies, only trigger on those specific cookies
-      if (platform.keyCookies && !platform.keyCookies.includes(cookie.name)) return;
-
-      // For platforms without key cookies (keyCookies=null), skip initial page-load cookies.
-      // Only trigger on cookies set after a reasonable login delay (5s after tab opened).
-      if (!platform.keyCookies && loginTabId && (Date.now() - loginStartTime) < 5000) return;
-
-      // Key cookie detected — user has logged in.
-      // Remove listener immediately to prevent re-entry, then settle.
-      cleanup();
-      setTimeout(async () => {
-        const cookies = await readPlatformCookies(platformCode);
-        if (cookies) {
-          resolve(cookies);
-        } else {
-          reject(new Error('Cookie capture failed after login detected'));
-        }
-      }, 1000);
-    }
-
-    chrome.cookies.onChanged.addListener(onCookieChanged);
-
-    // Open login page
-    chrome.tabs.create({ url: platform.loginUrl }, (tab) => {
-      loginTabId = tab.id;
-    });
-  });
-}
-
-/**
- * Handle messages from the web app via externally_connectable.
+ * Handle messages from the web app.
  */
 chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
   const { action, platform } = message || {};
 
   switch (action) {
     case 'checkInstalled':
-      sendResponse({ installed: true, version: chrome.runtime.getManifest().version });
+      sendResponse({
+        installed: true,
+        version: chrome.runtime.getManifest().version,
+        bridgeVersion: '1.1.0',
+      });
       break;
 
     case 'getCookies':
@@ -154,27 +129,32 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
         sendResponse({ cookies: null, needsLogin: false, noCookieNeeded: true });
         break;
       }
-      readPlatformCookies(platform).then(cookies => {
-        if (cookies) {
-          sendResponse({ cookies });
-        } else {
-          sendResponse({ cookies: null, needsLogin: true });
-        }
+      readPlatformCookies(platform).then(({ cookies, debug }) => {
+        sendResponse({
+          cookies,
+          needsLogin: !cookies,
+          debug, // include debug info so frontend can show what happened
+        });
       });
-      return true; // async response
+      return true;
 
+    case 'connect':
     case 'loginAndCapture':
+      // For now, just do getCookies — no tab opening
       if (!platform || !PLATFORMS[platform]) {
-        sendResponse({ error: `Platform "${platform}" does not use cookie auth` });
+        sendResponse({ error: `Platform "${platform}" not supported` });
         break;
       }
-      loginAndCapture(platform).then(
-        cookies => sendResponse({ cookies }),
-        err => sendResponse({ error: err.message })
-      );
-      return true; // async response
+      readPlatformCookies(platform).then(({ cookies, debug }) => {
+        if (cookies) {
+          sendResponse({ cookies, debug });
+        } else {
+          sendResponse({ error: 'no_cookies', debug });
+        }
+      });
+      return true;
 
     default:
-      sendResponse({ error: 'Unknown action' });
+      sendResponse({ error: 'Unknown action', receivedAction: action });
   }
 });

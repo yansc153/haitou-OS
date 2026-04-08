@@ -1,7 +1,7 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { ok, err } from '../_shared/response.ts';
-import { getAuthenticatedUser } from '../_shared/auth.ts';
+import { getAuthenticatedUser, getServiceClient } from '../_shared/auth.ts';
 
 /**
  * GET /opportunity-detail?id=<uuid>
@@ -85,7 +85,9 @@ serve(async (req) => {
     .limit(1)
     .single();
 
-  const { data: resumeAsset } = await supabase!
+  // Use service client to bypass RLS for resume_asset + storage access
+  const serviceClient = getServiceClient();
+  const { data: resumeAsset } = await serviceClient
     .from('resume_asset')
     .select('storage_path, file_name')
     .eq('user_id', user!.id)
@@ -94,7 +96,7 @@ serve(async (req) => {
 
   let resume_signed_url: string | null = null;
   if (resumeAsset?.storage_path) {
-    const { data: signedData } = await supabase!.storage
+    const { data: signedData } = await serviceClient.storage
       .from('resumes')
       .createSignedUrl(resumeAsset.storage_path, 3600); // 1 hour
     resume_signed_url = signedData?.signedUrl || null;

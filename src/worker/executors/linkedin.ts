@@ -50,8 +50,7 @@ export async function discoverLinkedInJobs(params: {
 
     // Check for auth wall / CAPTCHA
     if (await isAuthWall(page)) {
-      console.warn('[linkedin] Session expired or auth wall detected');
-      return [];
+      throw new Error('session_expired: LinkedIn auth wall detected');
     }
 
     // Extract job cards

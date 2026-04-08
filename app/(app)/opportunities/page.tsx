@@ -24,6 +24,36 @@ function stripHtml(html: string): string {
 
 /* ─── Constants ─── */
 
+/** Translate AI reason tags to Chinese. Uses exact match first, then keyword matching. */
+function translateReasonTag(tag: string): string {
+  // Keyword-based translation patterns (covers most AI-generated tags)
+  const patterns: [RegExp, string][] = [
+    [/profile.*empty|profile.*incomplete|no.*experience|no.*skills/i, '简历数据不完整'],
+    [/parse.*confidence.*low/i, '简历解析置信度低'],
+    [/unable.*verify|cannot.*verify/i, '无法验证相关资质'],
+    [/job.*description.*missing|job.*description.*empty/i, '职位描述为空'],
+    [/domain.*mismatch/i, '领域不匹配'],
+    [/location.*mismatch|location.*unknown/i, '地点不匹配'],
+    [/lack.*experience|missing.*experience/i, '缺少相关经验'],
+    [/strong.*match|strong.*fit/i, '强匹配'],
+    [/relevant.*experience/i, '相关行业经验'],
+    [/weak_fit|weak.*fit/i, '弱匹配'],
+    [/candidate.*profile.*data/i, '候选人资料不完整'],
+    [/work.*authorization/i, '工作许可未知'],
+    [/salary/i, '薪资相关'],
+    [/overqualified/i, '资历超出要求'],
+    [/underqualified/i, '资历不足'],
+    [/skills.*match/i, '技能匹配'],
+    [/experience.*match/i, '经验匹配'],
+  ];
+  for (const [re, zh] of patterns) {
+    if (re.test(tag)) return zh;
+  }
+  // If all ASCII, likely untranslated English — return a generic label
+  if (/^[a-zA-Z0-9_\s.,;:()'"\-/]+$/.test(tag) && tag.length > 20) return '详细评估';
+  return tag;
+}
+
 const STAGES = [
   { value: 'discovered', label: '发现', icon: '🔍' },
   { value: 'screened', label: '筛选', icon: '🎯' },
@@ -33,9 +63,14 @@ const STAGES = [
 ];
 
 const FIT_ZH: Record<string, { label: string; cls: string }> = {
-  strong:    { label: '强匹配', cls: 'bg-[hsl(var(--status-active))]/10 text-[hsl(var(--status-active))]' },
-  moderate:  { label: '中等', cls: 'bg-[hsl(var(--status-warning))]/10 text-[hsl(var(--status-warning))]' },
-  weak:      { label: '弱', cls: 'bg-muted-foreground/10 text-muted-foreground' },
+  strong_fit: { label: '强匹配', cls: 'bg-[hsl(var(--status-active))]/10 text-[hsl(var(--status-active))]' },
+  strong:     { label: '强匹配', cls: 'bg-[hsl(var(--status-active))]/10 text-[hsl(var(--status-active))]' },
+  moderate_fit: { label: '中等', cls: 'bg-[hsl(var(--status-warning))]/10 text-[hsl(var(--status-warning))]' },
+  moderate:   { label: '中等', cls: 'bg-[hsl(var(--status-warning))]/10 text-[hsl(var(--status-warning))]' },
+  weak_fit:   { label: '弱', cls: 'bg-muted-foreground/10 text-muted-foreground' },
+  weak:       { label: '弱', cls: 'bg-muted-foreground/10 text-muted-foreground' },
+  uncertain:  { label: '待评估', cls: 'bg-muted-foreground/10 text-muted-foreground' },
+  misaligned: { label: '不匹配', cls: 'bg-[hsl(var(--status-error))]/10 text-[hsl(var(--status-error))]' },
 };
 
 const STAGE_INDEX: Record<string, number> = {
@@ -409,7 +444,7 @@ export default function OpportunitiesPage() {
                         {detail.opportunity.recommendation_reason_tags && detail.opportunity.recommendation_reason_tags.length > 0 && (
                           <div className="flex items-center gap-1.5 flex-wrap">
                             {detail.opportunity.recommendation_reason_tags.map((tag: string) => (
-                              <span key={tag} className="px-2 py-0.5 rounded bg-surface-low text-[10px] text-muted-foreground">{tag}</span>
+                              <span key={tag} className="px-2 py-0.5 rounded bg-surface-low text-[10px] text-muted-foreground">{translateReasonTag(tag)}</span>
                             ))}
                           </div>
                         )}
@@ -622,13 +657,13 @@ export default function OpportunitiesPage() {
                       ) : (
                         <div className="surface-card p-6">
                           <p className="text-sm text-muted-foreground mb-1">此机会暂无 AI 材料</p>
-                          <p className="text-xs text-muted-foreground/50">AI 完成简历定制后，文档对比将自动出现</p>
-                          {detail.opportunity.job_description_text && (
-                            <div className="mt-4 pt-4 border-t border-border/20">
-                              <p className="text-xs font-label uppercase tracking-widest text-muted-foreground mb-2">职位描述</p>
-                              <p className="text-sm text-muted-foreground leading-relaxed whitespace-pre-wrap max-h-[300px] overflow-y-auto">{stripHtml(detail.opportunity.job_description_text)}</p>
-                            </div>
-                          )}
+                          <p className="text-xs text-muted-foreground/50">
+                            {detail.opportunity.recommendation === 'advance'
+                              ? '简历顾问正在定制中，请稍候...'
+                              : detail.opportunity.recommendation === 'watch'
+                                ? '该岗位为"持续观望"，暂不生成定制简历。如需投递，可手动推进。'
+                                : '该岗位未推荐投递，AI 不会生成定制简历。只有"推荐投递"的岗位才会触发简历精修流程。'}
+                          </p>
                         </div>
                       )}
                     </div>

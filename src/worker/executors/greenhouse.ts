@@ -57,7 +57,8 @@ export async function discoverGreenhouseJobs(
   const res = await fetch(url);
 
   if (!res.ok) {
-    throw new Error(`Greenhouse API error: ${res.status} ${res.statusText}`);
+    console.warn(`[greenhouse] Board "${boardToken}" returned ${res.status} — skipping (board may not exist or token is incorrect)`);
+    return [];
   }
 
   const data = (await res.json()) as { jobs: GreenhouseJob[] };
@@ -108,7 +109,7 @@ export async function submitGreenhouseApplication(params: {
   try {
     // Navigate to application page
     console.log(`[greenhouse] Navigating to: ${params.jobUrl}`);
-    await page.goto(params.jobUrl, { waitUntil: 'networkidle', timeout: 30000 });
+    await page.goto(params.jobUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await randomDelay(2000, 4000);
 
     // Check if we're on an application form
@@ -118,7 +119,7 @@ export async function submitGreenhouseApplication(params: {
       const applyButton = page.locator('a:has-text("Apply"), button:has-text("Apply"), a:has-text("投递")').first();
       if (await applyButton.isVisible().catch(() => false)) {
         await applyButton.click();
-        await page.waitForLoadState('networkidle', { timeout: 15000 });
+        await page.waitForLoadState('domcontentloaded', { timeout: 15000 });
         await randomDelay(1000, 2000);
       }
     }
@@ -181,7 +182,7 @@ export async function submitGreenhouseApplication(params: {
 
     // Wait for navigation/response
     try {
-      await page.waitForLoadState('networkidle', { timeout: 15000 });
+      await page.waitForLoadState('domcontentloaded', { timeout: 15000 });
     } catch {
       // Some forms stay on the same page with a success message
     }

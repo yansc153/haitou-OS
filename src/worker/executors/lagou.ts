@@ -46,13 +46,15 @@ export async function discoverLagouJobs(params: {
     const keyword = params.keywords.join(' ');
     const searchUrl = `https://www.lagou.com/wn/zhaopin?kd=${encodeURIComponent(keyword)}${params.city ? `&city=${encodeURIComponent(params.city)}` : ''}`;
 
+    console.log(`[lagou] Navigating to search: ${searchUrl}`);
     await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    console.log(`[lagou] Page loaded, URL: ${page.url()}`);
     await randomDelay(DELAY.page[0], DELAY.page[1]);
 
     if (isLoginPage(page)) {
-      console.warn('[lagou] Session expired — login redirect');
-      return [];
+      throw new Error('session_expired: 拉勾 login redirect detected');
     }
+    console.log('[lagou] Auth check passed, scraping results...');
 
     const jobs: LagouJob[] = [];
     const cards = page.locator('.item__10RTO, .position-list-item, .list_item_top');
@@ -97,6 +99,7 @@ export async function discoverLagouJobs(params: {
       } catch { /* skip detail */ }
     }
 
+    console.log(`[lagou] Discovery complete: ${jobs.length} jobs found`);
     return jobs;
 
   } catch (err) {

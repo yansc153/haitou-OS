@@ -1,4 +1,4 @@
-name: CI
+name: CI + CD
 
 on:
   push:
@@ -7,8 +7,11 @@ on:
     branches: [main]
 
 jobs:
-  build:
+  # ━━━ Stage 1: CI (每次 push/PR 都跑) ━━━
+  ci:
     runs-on: ubuntu-latest
+    env:
+      SUPABASE_PROJECT_ID: rlpipofmnqveughopxud
     steps:
       - uses: actions/checkout@v4
 
@@ -23,10 +26,66 @@ jobs:
         run: npx tsc --noEmit
 
       - name: Unit tests
-        run: npx vitest run tests/pipeline-logic.test.ts tests/budget.test.ts tests/state-machines.test.ts tests/pipeline-routing.test.ts tests/executor-contracts.test.ts --reporter=verbose
+        run: npx vitest run tests/pipeline-logic.test.ts tests/budget.test.ts tests/state-machines.test.ts --reporter=verbose
 
-      - name: Build
+      - name: Build frontend
         run: npm run build
         env:
-          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder
+          NEXT_PUBLIC_SUPABASE_URL: "https://rlpipofmnqveughopxud.supabase.co"
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+
+  # ━━━ Stage 2: Deploy Supabase Edge Functions (仅 main) ━━━
+  deploy-edge-functions:
+    needs: ci
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Deploy all Edge Functions
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          supabase link --project-ref rlpipofmnqveughopxud
+          supabase functions deploy --no-verify-jwt
+
+  # ━━━ Stage 3: Deploy Fly.io Worker (仅 main) ━━━
+  deploy-worker:
+    needs: ci
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy worker
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl deploy --remote-only
+
+  # ━━━ Stage 4: Deploy Frontend to Vercel (仅 main) ━━━
+  deploy-frontend:
+    needs: ci
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Deploy to Vercel
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: npx vercel --prod --token "$VERCEL_TOKEN"

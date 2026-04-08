@@ -65,15 +65,28 @@ export class TaskExecutor {
       // Route to appropriate handler based on task_type
       const result = await this.routeTask(task);
 
-      // Mark task completed
-      await this.db
-        .from('agent_task')
-        .update({
-          status: 'completed',
-          completed_at: new Date().toISOString(),
-          output_summary: result.summary,
-        })
-        .eq('id', task.id);
+      // Only mark completed if task actually succeeded
+      // Submission tasks report outcome in summary — check for failure signals
+      const isFailure = result.summary?.includes('hard_failure') || result.summary?.includes('session_expired');
+      if (isFailure) {
+        await this.db
+          .from('agent_task')
+          .update({
+            status: 'failed',
+            failed_at: new Date().toISOString(),
+            error_message: result.summary,
+          })
+          .eq('id', task.id);
+      } else {
+        await this.db
+          .from('agent_task')
+          .update({
+            status: 'completed',
+            completed_at: new Date().toISOString(),
+            output_summary: result.summary,
+          })
+          .eq('id', task.id);
+      }
 
       // Mark agent back to ready
       await this.db.from('agent_instance')
@@ -104,6 +117,9 @@ export class TaskExecutor {
 
   private async routeTask(task: AgentTask): Promise<{ summary: string }> {
     switch (task.task_type) {
+      case 'keyword_generation':
+        return await this.handleKeywordGeneration(task);
+
       case 'opportunity_discovery':
         await this.pipeline.runDiscoveryCycle(task.team_id);
         return { summary: '岗位发现周期完成' };
@@ -478,7 +494,7 @@ export class TaskExecutor {
           team_id: teamId,
           platform_message_id: platformMsgId,
           direction: 'inbound',
-          message_type: 'reply',
+          message_type: msg.isSystemCard ? 'system_note' : 'reply',
           content_text: msg.messageText,
           sent_at: msg.receivedAt,
         });
@@ -493,5 +509,114 @@ export class TaskExecutor {
         .eq('id', thread.id);
     }
     // Other platforms: zhaopin, lagou, etc. — to be implemented per their specs
+  }
+
+  /**
+   * Handle keyword generation — the first step in the agent causal chain.
+   * 调度官唤醒履历分析师 → 分析简历 → 产出关键词 → 调度官分配给岗位研究员
+   */
+  private async handleKeywordGeneration(task: AgentTask): Promise<{ summary: string }> {
+    const teamId = task.team_id;
+
+    // 1. 调度官唤醒履历分析师
+    await this.insertEvent(teamId, 'agent_online', '调度官已上线，检测到需要分析简历，唤醒履历分析师');
+    await this.insertEvent(teamId, 'resume_analysis_started', '履历分析师已上线，开始分析简历...');
+
+    // 2. 读取 profile_baseline
+    const { data: baseline } = await this.db
+      .from('profile_baseline')
+      .select('*')
+      .eq('team_id', teamId)
+      .order('version', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (!baseline) {
+      await this.insertEvent(teamId, 'resume_analysis_completed', '履历分析师：未找到简历数据，无法生成关键词');
+      return { summary: '关键词生成跳过：无简历数据' };
+    }
+
+    // 3. 调用 keyword-generation skill
+    const skillInput = {
+      profile_baseline: {
+        experiences: baseline.experiences,
+        skills: baseline.skills,
+        education: baseline.education,
+        primary_domain: baseline.primary_domain,
+        headline_summary: baseline.headline_summary,
+        capability_tags: baseline.capability_tags,
+        capability_gaps: baseline.capability_gaps,
+        inferred_role_directions: baseline.inferred_role_directions,
+        languages: baseline.languages,
+        certifications: baseline.certifications,
+        seniority_level: baseline.seniority_level,
+        source_language: baseline.source_language,
+      },
+    };
+
+    const result = await executeSkill('keyword-generation', skillInput);
+
+    if (!result.success) {
+      // Fallback: use inferred_role_directions for EN only; leave zh_keywords empty
+      // so Chinese platforms skip discovery rather than searching with English terms
+      const fallbackEn = (baseline.inferred_role_directions as string[]) || ['software engineer'];
+      const fallback = { en_keywords: fallbackEn, zh_keywords: [] as string[], target_companies: [], primary_domain: baseline.primary_domain || 'general', seniority_bracket: baseline.seniority_level || 'mid' };
+
+      await this.db
+        .from('profile_baseline')
+        .update({ search_keywords: fallback })
+        .eq('id', baseline.id);
+
+      await this.insertEvent(teamId, 'resume_analysis_completed', `履历分析师完成分析（降级模式）— 使用推断方向: ${fallbackEn.slice(0, 3).join(', ')}`);
+      return { summary: `关键词生成（降级）: ${fallbackEn.length} 个方向` };
+    }
+
+    // 4. 写入 profile_baseline.search_keywords
+    const output = result.output as {
+      en_keywords: string[];
+      zh_keywords: string[];
+      target_companies: string[];
+      primary_domain: string;
+      seniority_bracket: string;
+      reasoning: string;
+    };
+
+    await this.db
+      .from('profile_baseline')
+      .update({ search_keywords: output })
+      .eq('id', baseline.id);
+
+    // 5. 插入因果链事件
+    const enPreview = output.en_keywords.slice(0, 3).join(', ');
+    const zhPreview = output.zh_keywords.slice(0, 3).join('、');
+    const companyPreview = output.target_companies.slice(0, 3).join(', ');
+
+    await this.insertEvent(teamId, 'resume_analysis_completed',
+      `履历分析师完成分析 — 识别出 ${output.en_keywords.length + output.zh_keywords.length} 个搜索方向，领域: ${output.primary_domain}，级别: ${output.seniority_bracket}`);
+
+    await this.insertEvent(teamId, 'keyword_generated',
+      `生成搜索关键词:\n英文: ${enPreview}...\n中文: ${zhPreview}...\n目标公司: ${companyPreview}...`);
+
+    await this.insertEvent(teamId, 'task_assigned',
+      `调度官将 ${output.zh_keywords.length} 个中文关键词分配给岗位研究员（智联/拉勾/猎聘/Boss）`);
+    await this.insertEvent(teamId, 'task_assigned',
+      `调度官将 ${output.en_keywords.length} 个英文关键词 + ${output.target_companies.length} 个目标公司分配给岗位研究员（LinkedIn/Greenhouse/Lever）`);
+
+    if (result.tokens_used) {
+      const { recordTokenUsage } = await import('./pipeline.js');
+      await recordTokenUsage(this.db, teamId, result.tokens_used.input, result.tokens_used.output);
+    }
+
+    return { summary: `关键词生成完成: ${output.en_keywords.length} 英文 + ${output.zh_keywords.length} 中文 + ${output.target_companies.length} 公司` };
+  }
+
+  private async insertEvent(teamId: string, eventType: string, summaryText: string): Promise<void> {
+    await this.db.from('timeline_event').insert({
+      team_id: teamId,
+      event_type: eventType,
+      summary_text: summaryText,
+      actor_type: 'agent',
+      visibility: 'feed',
+    });
   }
 }

@@ -45,17 +45,12 @@ serve(async (req) => {
     }
   }
 
-  // Sort
-  if (sort === 'created_at') {
-    query = query.order('created_at', { ascending: false });
-  } else {
-    query = query.order('latest_event_at', { ascending: false, nullsFirst: false });
-  }
+  // Sort — cursor field must match sort field for correct pagination
+  const sortField = sort === 'latest_event_at' ? 'latest_event_at' : 'created_at';
+  query = query.order(sortField, { ascending: false });
 
-  // Cursor-based pagination (must use same field as sort)
-  const cursorField = sort === 'created_at' ? 'created_at' : 'latest_event_at';
   if (cursor) {
-    query = query.lt(cursorField, cursor);
+    query = query.lt(sortField, cursor);
   }
 
   query = query.limit(limit + 1);

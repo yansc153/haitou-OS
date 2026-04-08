@@ -32,7 +32,27 @@ type BossMessage = {
   senderName: string;
   messageText: string;
   receivedAt: string;
+  isSystemCard: boolean;
+  cardType: 'resume_requested' | 'contact_exchanged' | 'wechat_exchanged' | 'phone_exchanged' | 'resume_viewed' | null;
 };
+
+// Boss直聘 系统卡片识别 — 这些是确定性信号，不需要 NLU
+const SYSTEM_CARD_PATTERNS: Array<{ pattern: RegExp; cardType: BossMessage['cardType'] }> = [
+  { pattern: /索要.*简历|简历.*索要|查看了?你的简历|已查看简历/, cardType: 'resume_requested' },
+  { pattern: /已交换联系方式|交换了联系方式|已互换联系方式/, cardType: 'contact_exchanged' },
+  { pattern: /已交换微信|交换了微信|互换.*微信|已添加微信/, cardType: 'wechat_exchanged' },
+  { pattern: /已交换电话|交换了电话号码|互换.*电话/, cardType: 'phone_exchanged' },
+  { pattern: /对方查看了你的|已被查看|简历已读/, cardType: 'resume_viewed' },
+];
+
+function detectSystemCard(text: string): { isSystemCard: boolean; cardType: BossMessage['cardType'] } {
+  for (const { pattern, cardType } of SYSTEM_CARD_PATTERNS) {
+    if (pattern.test(text)) {
+      return { isSystemCard: true, cardType };
+    }
+  }
+  return { isSystemCard: false, cardType: null };
+}
 
 /**
  * Discover jobs via Boss直聘 keyword search.
@@ -55,14 +75,16 @@ export async function discoverBossJobs(params: {
     const keyword = params.keywords.join(' ');
     const searchUrl = `https://www.zhipin.com/web/geek/job?query=${encodeURIComponent(keyword)}${params.city ? `&city=${encodeURIComponent(params.city)}` : ''}`;
 
+    console.log(`[boss] Navigating to search: ${searchUrl}`);
     await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    console.log(`[boss] Page loaded, URL: ${page.url()}`);
     await randomDelay(DELAY.page[0], DELAY.page[1]);
 
     // Check for security challenge / login redirect
     if (isLoginPage(page) || await isSecurityChallenge(page)) {
-      console.warn('[boss] Session expired or security challenge');
-      return [];
+      throw new Error('session_expired: Boss直聘 login/security challenge detected');
     }
+    console.log('[boss] Auth + security check passed, scraping results...');
 
     const jobs: BossJob[] = [];
     const cards = page.locator('.job-card-wrapper, .job-card-body, .search-job-result .job-card-box');
@@ -115,6 +137,7 @@ export async function discoverBossJobs(params: {
       } catch { /* skip detail */ }
     }
 
+    console.log(`[boss] Discovery complete: ${jobs.length} jobs found`);
     return jobs;
 
   } catch (err) {
@@ -260,11 +283,15 @@ export async function pollBossMessages(params: {
         const threadId = threadLink?.match(/id=(\w+)/)?.[1] || `boss-thread-${i}`;
 
         if (senderName.trim() && lastMsg.trim()) {
+          const trimmedMsg = lastMsg.trim();
+          const { isSystemCard, cardType } = detectSystemCard(trimmedMsg);
           messages.push({
             threadId,
             senderName: senderName.trim(),
-            messageText: lastMsg.trim(),
+            messageText: isSystemCard ? `[系统] ${trimmedMsg}` : trimmedMsg,
             receivedAt: new Date().toISOString(), // Boss doesn't always show precise timestamps
+            isSystemCard,
+            cardType,
           });
         }
       } catch { /* skip conversation item */ }

@@ -54,9 +54,24 @@ const HANDOFF_TYPE_ZH: Record<string, string> = {
 };
 
 const EVENT_TYPE_ZH: Record<string, string> = {
+  // Team lifecycle
   team_started: '系统启动',
   team_paused: '系统暂停',
   team_forced_pause: '余额耗尽',
+  // Agent chain events (因果链)
+  agent_online: '智能体上线',
+  resume_analysis_started: '简历分析中',
+  resume_analysis_completed: '简历分析完成',
+  keyword_generated: '关键词生成',
+  task_assigned: '任务分配',
+  platform_search_started: '平台搜索中',
+  platform_search_completed: '平台搜索完成',
+  screening_started: '开始筛选',
+  material_started: '材料生成中',
+  material_completed: '材料生成完成',
+  submission_started: '开始投递',
+  reply_detected: '收到回复',
+  // Existing task completion events
   opportunity_screened: '岗位筛选',
   task_opportunity_discovery_completed: '岗位发现',
   task_screening_completed: '批量筛选',
@@ -66,6 +81,7 @@ const EVENT_TYPE_ZH: Record<string, string> = {
   task_follow_up_completed: '跟进完成',
   task_first_contact_completed: '首次联系',
   task_handoff_takeover_completed: '交接处理',
+  task_keyword_generation_completed: '关键词分析完成',
   submission_success: '投递成功',
   submission_failed: '投递失败',
   handoff_created: '交接创建',
@@ -102,6 +118,7 @@ export default function TeamHomePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [liveFeedItems, setLiveFeedItems] = useState<FeedItem[]>([]);
+  const [expiringPlatforms, setExpiringPlatforms] = useState<Array<{ name: string; minutesLeft: number }>>([]);
 
   useEffect(() => {
     async function load() {
@@ -113,6 +130,27 @@ export default function TeamHomePage() {
         });
         const json = await res.json();
         if (json.data) setData(json.data);
+
+        // Check for expiring platform sessions
+        const platformsRes = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/platforms-list`, {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        const platformsJson = await platformsRes.json();
+        if (platformsJson.data) {
+          const allPlatforms = [...(platformsJson.data.global_english || []), ...(platformsJson.data.china || [])];
+          const TTL_MAP: Record<string, number> = { boss_zhipin: 3, linkedin: 24, zhaopin: 24, lagou: 24, liepin: 12 };
+          const expiring: Array<{ name: string; minutesLeft: number }> = [];
+          for (const p of allPlatforms) {
+            const plat = p as unknown as { code: string; connection_status: string; session_expires_at?: string; display_name_zh?: string; display_name: string };
+            if (plat.connection_status !== 'active' || !plat.session_expires_at) continue;
+            const msLeft = new Date(plat.session_expires_at).getTime() - Date.now();
+            const ttlMs = (TTL_MAP[plat.code] || 24) * 60 * 60 * 1000;
+            if (msLeft > 0 && msLeft < ttlMs * 0.2) {
+              expiring.push({ name: plat.display_name_zh || plat.display_name, minutesLeft: Math.round(msLeft / 60000) });
+            }
+          }
+          setExpiringPlatforms(expiring);
+        }
       } catch (e) { setError(e instanceof Error ? e.message : '加载失败'); }
       setLoading(false);
     }
@@ -186,6 +224,24 @@ export default function TeamHomePage() {
           </span>
         </div>
       </div>
+
+      {/* Platform expiry warnings */}
+      {expiringPlatforms.length > 0 && (
+        <div className="mb-6 space-y-2">
+          {expiringPlatforms.map(p => (
+            <Link key={p.name} href="/platforms" className="block rounded-xl border border-status-warning/30 bg-status-warning/5 px-4 py-3 hover:bg-status-warning/10 transition-colors">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-status-warning text-sm">⚠</span>
+                  <span className="text-sm font-bold">{p.name}登录即将过期</span>
+                  <span className="text-xs text-muted-foreground">（剩余 {p.minutesLeft} 分钟）</span>
+                </div>
+                <span className="text-xs text-status-warning font-bold">点击刷新 →</span>
+              </div>
+            </Link>
+          ))}
+        </div>
+      )}
 
       {/* Agent Roster */}
       {agents.length > 0 && (

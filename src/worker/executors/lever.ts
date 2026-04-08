@@ -96,14 +96,14 @@ export async function submitLeverApplication(params: {
     const applyUrl = `${cleanUrl}/apply`;
     console.log(`[lever] Navigating to: ${applyUrl}`);
 
-    await page.goto(applyUrl, { waitUntil: 'networkidle', timeout: 30000 });
+    await page.goto(applyUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await randomDelay(2000, 5000);
 
     // If we're on the job page (not apply), click the Apply button
     const applyButton = page.locator('a.postings-btn[href*="apply"], a:has-text("Apply for this job"), button:has-text("Apply")').first();
     if (await applyButton.isVisible().catch(() => false)) {
       await applyButton.click();
-      await page.waitForLoadState('networkidle', { timeout: 15000 });
+      await page.waitForLoadState('domcontentloaded', { timeout: 15000 });
       await randomDelay(1000, 2000);
     }
 
@@ -147,7 +147,7 @@ export async function submitLeverApplication(params: {
     await submitBtn.click();
 
     try {
-      await page.waitForLoadState('networkidle', { timeout: 15000 });
+      await page.waitForLoadState('domcontentloaded', { timeout: 15000 });
     } catch { /* some forms update in-place */ }
 
     await randomDelay(2000, 3000);

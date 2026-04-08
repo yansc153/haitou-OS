@@ -46,14 +46,16 @@ export async function discoverZhaopinJobs(params: {
     const keyword = params.keywords.join(' ');
     const searchUrl = `https://sou.zhaopin.com/?kw=${encodeURIComponent(keyword)}${params.city ? `&ct=${encodeURIComponent(params.city)}` : ''}`;
 
+    console.log(`[zhaopin] Navigating to search: ${searchUrl}`);
     await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    console.log(`[zhaopin] Page loaded, URL: ${page.url()}`);
     await randomDelay(DELAY.page[0], DELAY.page[1]);
 
     // Check for login redirect
     if (isLoginPage(page)) {
-      console.warn('[zhaopin] Session expired — login redirect');
-      return [];
+      throw new Error('session_expired: 智联招聘 login redirect detected');
     }
+    console.log('[zhaopin] Auth check passed, scraping results...');
 
     const jobs: ZhaopinJob[] = [];
     const cards = page.locator('.joblist-box__item, .contentpile__content__wrapper__item');
@@ -64,14 +66,13 @@ export async function discoverZhaopinJobs(params: {
         const card = cards.nth(i);
         await card.scrollIntoViewIfNeeded();
 
-        const title = await card.locator('.iteminfo__line1__jobname, a[data-at="job-name"]').first().textContent() || '';
-        const company = await card.locator('.iteminfo__line1__compname, a[data-at="company-name"]').first().textContent() || '';
-        const location = await card.locator('.iteminfo__line2__jobdesc span').first().textContent() || '';
-        // Salary may be font-obfuscated — extract raw text (may be garbled)
-        const salary = await card.locator('.iteminfo__line2__jobdesc__salary, .iteminfo__line1__salary').first().textContent().catch(() => '') || '';
+        const title = await card.locator('.jobinfo__name, .iteminfo__line1__jobname, a[data-at="job-name"]').first().textContent({ timeout: 3000 }).catch(() => '') || '';
+        const company = await card.locator('.companyinfo__name, .iteminfo__line1__compname, a[data-at="company-name"]').first().textContent({ timeout: 3000 }).catch(() => '') || '';
+        const location = await card.locator('.jobinfo__other-info-item:first-child, .iteminfo__line2__jobdesc span').first().textContent({ timeout: 3000 }).catch(() => '') || '';
+        const salary = await card.locator('.jobinfo__salary, .iteminfo__line2__jobdesc__salary, .iteminfo__line1__salary').first().textContent({ timeout: 3000 }).catch(() => '') || '';
 
-        const linkEl = card.locator('a[href*="jobs.zhaopin.com"], a[href*="/jobdetail"]').first();
-        const href = await linkEl.getAttribute('href') || '';
+        const linkEl = card.locator('a.jobinfo__name, a[href*="jobs.zhaopin.com"], a[href*="/jobdetail"]').first();
+        const href = await linkEl.getAttribute('href', { timeout: 3000 }).catch(() => '') || '';
 
         // Extract job ID from URL
         const jobId = href.match(/\/(\d+)\.htm/)?.[1] || href.match(/jobid=(\d+)/i)?.[1] || `zhaopin-${i}`;
@@ -100,6 +101,7 @@ export async function discoverZhaopinJobs(params: {
       } catch { /* skip detail */ }
     }
 
+    console.log(`[zhaopin] Discovery complete: ${jobs.length} jobs found`);
     return jobs;
 
   } catch (err) {

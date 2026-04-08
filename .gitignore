@@ -25,3 +25,4 @@ e2e/*.png
 
 # Platform research
 Platform Research/boss-cli/
+.vercel

@@ -7,7 +7,7 @@ import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 // Handoff state machine (mirrors src/shared/state-machines.ts)
 const HANDOFF_TRANSITIONS: Record<string, string[]> = {
-  awaiting_takeover: ['in_user_handling'],
+  awaiting_takeover: ['in_user_handling', 'waiting_external'],
   in_user_handling: ['waiting_external', 'resolved', 'returned_to_team', 'closed'],
   waiting_external: ['in_user_handling', 'resolved', 'closed'],
   resolved: ['closed'],

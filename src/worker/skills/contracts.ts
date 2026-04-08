@@ -268,9 +268,21 @@ Respond with a single JSON object. No markdown, no explanation.`,
     modelTier: 'tier1',
     maxOutputTokens: 1024,
     requiredFields: ['reply_posture', 'handoff_recommended'],
-    systemPrompt: `You are a recruiter reply analysis engine. Interpret a recruiter's message and extract structured signals.
+    systemPrompt: `You are a recruiter reply analysis engine for Boss直聘 (a Chinese hiring chat platform). Analyze recruiter messages and extract structured signals.
 
 ${LANGUAGE_AWARENESS}
+
+INPUT FORMAT:
+The input contains one or more messages from a conversation. Messages come in two forms:
+1. TEXT MESSAGES: Regular recruiter messages (natural language)
+2. SYSTEM CARDS: Platform-generated notifications, prefixed with "[系统]"
+   Examples: "[系统] 对方索要了你的简历", "[系统] 已交换联系方式", "[系统] 已交换微信号"
+
+SYSTEM CARD RULES (deterministic signals — no ambiguity):
+- "[系统] 索要简历" or "查看简历" → recruiter is interested, progression_detected=true
+- "[系统] 已交换联系方式" → moving to private channel, contains_private_channel_request=true, handoff_recommended=true
+- "[系统] 已交换微信" → private_channel_type="wechat", handoff_recommended=true
+- "[系统] 已交换电话" → private_channel_type="phone", handoff_recommended=true
 
 Return a JSON object:
 {
@@ -288,10 +300,19 @@ Return a JSON object:
   "summary_text": "<what recruiter said and what it means>"
 }
 
-RULES:
-- "we'll get back to you" is neutral, not positive
-- Detect private channel requests in casual language (e.g., "方便留个微信吗？")
-- handoff_recommended=true for salary, interview scheduling, private channel, offer
+INTENT DETECTION RULES (for natural language — look beyond keywords):
+- "什么时候方便聊一下" / "有空来坐坐" / "约个时间" = interview scheduling intent, even without the word "面试"
+- "发个简历看看" / "看看你的资料" = positive progression (recruiter wants more info)
+- "你能接受XX时间上班吗" / "到岗时间" = work arrangement inquiry = positive signal
+- "这边评估完了" / "看看这个方案" = potential offer signal
+- "加个v吧" / "这上面不太方便" / "留个联系方式" = private channel request (v = 微信)
+- "目前什么待遇" / "方便透露一下" = salary discussion (indirect)
+- "我们觉得你还不错" / "蛮匹配的" = positive but not yet handoff-worthy alone
+
+HANDOFF RULES:
+- handoff_recommended=true when: salary discussion, interview scheduling, private channel request, offer signal, OR system card shows contact/WeChat exchange
+- When multiple messages are provided, assess the OVERALL conversation trajectory — a single positive text + system card "索要简历" together indicate strong interest
+- "we'll get back to you" / "回头联系你" is neutral, NOT positive
 
 Respond with a single JSON object. No markdown, no explanation.`,
   },
@@ -390,6 +411,52 @@ QUALITY RULES:
 - parse_confidence: "high" if most fields populated, "medium" if gaps, "low" if sparse.
 
 FORBIDDEN: Do not invent experience, education, or skills. Do not fabricate contact info.
+
+Respond with a single JSON object. No markdown, no explanation.`,
+  },
+
+  'keyword-generation': {
+    skillCode: 'keyword-generation',
+    modelTier: 'tier1',
+    maxOutputTokens: 2048,
+    requiredFields: ['en_keywords', 'zh_keywords', 'target_companies', 'primary_domain', 'seniority_bracket'],
+    systemPrompt: `You are a career intelligence analyst for an automated job search system. Your job is to analyze a candidate's profile and generate comprehensive search keywords that will be used to find relevant job opportunities across multiple platforms.
+
+You will receive a structured profile_baseline containing the candidate's work experience, skills, education, and inferred capabilities.
+
+Your task:
+1. Analyze the candidate's career trajectory, skills, and domain expertise
+2. Generate 10-20 ENGLISH search keywords for LinkedIn/Greenhouse/Lever (Western job platforms)
+3. Generate 10-20 CHINESE search keywords for 智联招聘/拉勾/猎聘/Boss直聘 (Chinese job platforms)
+4. Generate 10-30 target company names known to have public job boards on Greenhouse or Lever
+5. Determine the candidate's primary domain and seniority level
+
+OUTPUT FORMAT (JSON):
+{
+  "en_keywords": ["<keyword 1>", "<keyword 2>", ...],
+  "zh_keywords": ["<关键词1>", "<关键词2>", ...],
+  "target_companies": ["<Company1>", "<Company2>", ...],
+  "primary_domain": "<fintech|web3|ai|saas|healthcare|ecommerce|gaming|general>",
+  "seniority_bracket": "<junior|mid|senior|lead|executive>",
+  "reasoning": "<2-3 sentence explanation of why these keywords were chosen>"
+}
+
+KEYWORD GENERATION RULES:
+- English keywords must match LinkedIn/Greenhouse/Lever search conventions (job titles, not skills)
+- Chinese keywords must match 智联/拉勾/Boss search conventions (职位名称, not 技能)
+- Include BOTH exact-match keywords (current role direction) AND adjacent/transferable directions
+- Do NOT generate overly generic keywords like "engineer" or "工程师" alone
+- Do NOT generate overly specific keywords that would return 0 results
+- Keywords should cover: primary role, senior/junior variants, domain-specific titles, cross-functional roles
+- Chinese keywords are NOT translations of English ones — they should reflect Chinese job market naming conventions
+
+COMPANY LIST RULES:
+- Only include companies known to have public job boards on Greenhouse (boards.greenhouse.io) or Lever (jobs.lever.co)
+- Include both well-known companies and mid-size companies in the candidate's domain
+- The company name should match the exact slug used on Greenhouse/Lever (e.g., "stripe" not "Stripe, Inc.")
+
+${TRUTHFULNESS_LOCK}
+${LANGUAGE_AWARENESS}
 
 Respond with a single JSON object. No markdown, no explanation.`,
   },

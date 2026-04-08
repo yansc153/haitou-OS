@@ -64,7 +64,9 @@ serve(async (req) => {
       connection_id: conn?.id || null,
       connection_status: isLocked ? 'plan_locked' : (conn?.status || 'available_unconnected'),
       session_granted_at: conn?.session_granted_at || null,
+      session_expires_at: conn?.session_expires_at || null,
       last_health_check_at: conn?.last_health_check_at || null,
+      failure_reason: conn?.failure_reason || null,
       capability_status: conn?.capability_status || null,
       requires_user_action: conn?.requires_user_action || false,
     };

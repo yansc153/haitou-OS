@@ -43,7 +43,8 @@ serve(async (req) => {
   }
 
   // Check if all required questions are answered
-  const requiredIds = ['target_roles', 'target_locations', 'work_mode', 'coverage_scope', 'strategy_mode'];
+  // target_roles removed: now inferred from resume via inferred_role_directions
+  const requiredIds = ['target_locations', 'work_mode', 'strategy_mode'];
   const allRequired = requiredIds.every((id) => mergedAnswers[id] != null);
   if (allRequired && draft.resume_upload_status === 'processed') {
     newStatus = 'ready_for_activation';

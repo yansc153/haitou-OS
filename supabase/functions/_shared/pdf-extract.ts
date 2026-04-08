@@ -139,20 +139,38 @@ function decodeXmlEntities(text: string): string {
 
 /**
  * Extract text from a resume file based on its MIME type.
- * PDF: tries binary extraction first, falls back to LLM vision if available.
+ * PDF: tries multiple strategies — binary parse → pdf-parse lib → Qwen Vision.
  * DOCX: XML-based extraction (reliable).
  */
 export async function extractResumeText(bytes: Uint8Array, mimeType: string): Promise<string> {
   if (mimeType === 'application/pdf') {
-    // Try binary extraction first (works for uncompressed PDFs)
+    // Strategy 1: Binary extraction (works for uncompressed PDFs)
     try {
       const text = await extractTextFromPdf(bytes);
       if (text.length > 100) return text;
     } catch {
-      // Binary extraction failed — PDF is likely compressed
+      // Binary extraction failed
     }
 
-    // Fallback: use Qwen vision API to extract text from PDF
+    // Strategy 2: Use pdf-parse (works with FlateDecode compressed PDFs)
+    try {
+      const pdfParse = (await import('https://esm.sh/pdf-parse@1.1.1')).default;
+      const result = await pdfParse(bytes);
+      if (result.text && result.text.trim().length > 100) return result.text;
+    } catch {
+      // pdf-parse failed
+    }
+
+    // Strategy 2b: Use unpdf (Mozilla pdf.js wrapper)
+    try {
+      const { extractText } = await import('https://esm.sh/unpdf@0.11.0');
+      const { text } = await extractText(bytes);
+      if (text && text.length > 100) return text;
+    } catch {
+      // unpdf not available or failed
+    }
+
+    // Strategy 3: Qwen Vision API
     const apiKey = Deno.env.get('DASHSCOPE_API_KEY');
     if (apiKey) {
       try {
@@ -162,7 +180,7 @@ export async function extractResumeText(bytes: Uint8Array, mimeType: string): Pr
       }
     }
 
-    throw new Error('PDF_EXTRACTION_FAILED: 无法提取 PDF 文本。PDF 可能使用了压缩格式。请上传 DOCX 格式的简历以获得最佳效果。');
+    throw new Error('PDF_EXTRACTION_FAILED: 无法提取 PDF 文本。请尝试上传 DOCX 格式的简历。');
   }
   if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
     return extractTextFromDocx(bytes);
@@ -171,36 +189,84 @@ export async function extractResumeText(bytes: Uint8Array, mimeType: string): Pr
 }
 
 /**
- * Use Qwen VL (vision-language) model to extract text from a PDF rendered as base64.
+ * Use DashScope file API + Qwen-Long to extract text from a PDF.
+ * Step 1: Upload PDF to DashScope temp storage
+ * Step 2: Use qwen-long model with file_id to extract text
  */
 async function extractPdfViaVision(bytes: Uint8Array, apiKey: string): Promise<string> {
-  const base64 = btoa(String.fromCharCode(...Array.from(bytes.slice(0, 500000)))); // Limit size
+  // Step 1: Upload to DashScope file API
+  const formData = new FormData();
+  formData.append('file', new Blob([bytes], { type: 'application/pdf' }), 'resume.pdf');
+  formData.append('purpose', 'file-extract');
 
-  const response = await fetch('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', {
+  const uploadRes = await fetch('https://dashscope.aliyuncs.com/compatible-mode/v1/files', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${apiKey}` },
+    body: formData,
+  });
+
+  if (uploadRes.ok) {
+    const uploadJson = await uploadRes.json();
+    const fileId = uploadJson.id;
+
+    if (fileId) {
+      // Step 2: Use qwen-long to extract text using file_id
+      const extractRes = await fetch('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'qwen-long',
+          max_tokens: 4096,
+          messages: [
+            { role: 'system', content: `fileid://${fileId}` },
+            { role: 'user', content: '请完整提取这份简历中的所有文字内容。按原始段落结构输出全部文字，保留所有标题、列表、日期等格式信息。不要总结或修改任何内容，原样输出。' },
+          ],
+        }),
+      });
+
+      if (extractRes.ok) {
+        const json = await extractRes.json();
+        const text = json.choices?.[0]?.message?.content || '';
+        if (text.length > 50) return text;
+      }
+    }
+  }
+
+  // Fallback: base64 approach with qwen-vl-max
+  const CHUNK = 32768;
+  let base64 = '';
+  for (let i = 0; i < bytes.length && i < 500000; i += CHUNK) {
+    const slice = bytes.slice(i, Math.min(i + CHUNK, bytes.length, 500000));
+    base64 += btoa(String.fromCharCode(...Array.from(slice)));
+  }
+
+  const vlRes = await fetch('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'qwen-vl-plus',
+      model: 'qwen-vl-max',
       max_tokens: 4096,
       messages: [{
         role: 'user',
         content: [
-          { type: 'file', file: { file_type: 'pdf', file_data: base64 } },
-          { type: 'text', text: 'Extract ALL text content from this resume PDF. Return the full text verbatim, preserving section structure. Do not summarize or modify.' },
+          { type: 'image_url', image_url: { url: `data:application/pdf;base64,${base64}` } },
+          { type: 'text', text: '请提取这份简历中的所有文字内容，按原始结构输出。' },
         ],
       }],
     }),
   });
 
-  if (!response.ok) {
-    throw new Error(`Vision API error: ${response.status}`);
+  if (vlRes.ok) {
+    const json = await vlRes.json();
+    const text = json.choices?.[0]?.message?.content || '';
+    if (text.length > 50) return text;
   }
 
-  const json = await response.json();
-  const text = json.choices?.[0]?.message?.content || '';
-  if (text.length < 50) throw new Error('Vision extraction returned insufficient text');
-  return text;
+  throw new Error('PDF extraction failed via all methods (binary, unpdf, file-extract, vision)');
 }

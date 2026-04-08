@@ -41,13 +41,15 @@ export async function discoverLiepinJobs(params: {
     const keyword = params.keywords.join(' ');
     const searchUrl = `https://www.liepin.com/zhaopin/?key=${encodeURIComponent(keyword)}${params.city ? `&dq=${encodeURIComponent(params.city)}` : ''}`;
 
+    console.log(`[liepin] Navigating to search: ${searchUrl}`);
     await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    console.log(`[liepin] Page loaded, URL: ${page.url()}`);
     await randomDelay(DELAY.page[0], DELAY.page[1]);
 
     if (isLoginPage(page)) {
-      console.warn('[liepin] Session expired — login redirect');
-      return [];
+      throw new Error('session_expired: 猎聘 login redirect detected');
     }
+    console.log('[liepin] Auth check passed, scraping results...');
 
     const jobs: LiepinJob[] = [];
     const cards = page.locator('.job-list-item, .job-card-pc-container, .job-card');
@@ -92,6 +94,7 @@ export async function discoverLiepinJobs(params: {
       } catch { /* skip detail */ }
     }
 
+    console.log(`[liepin] Discovery complete: ${jobs.length} jobs found`);
     return jobs;
 
   } catch (err) {
