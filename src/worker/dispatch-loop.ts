@@ -146,7 +146,17 @@ export class DispatchLoop {
       .limit(1)
       .single();
 
-    if (baseline?.search_keywords) return; // Already generated
+    // Check if keywords are actually populated (not just truthy — empty objects/arrays don't count)
+    const kw = baseline?.search_keywords as Record<string, unknown> | null;
+    if (kw) {
+      const en = (kw.en_keywords as string[]) || [];
+      const zh = (kw.zh_keywords as string[]) || [];
+      const companies = (kw.target_companies as string[]) || [];
+      if (en.length > 0 || zh.length > 0 || companies.length > 0) return; // Actually has keywords
+      // Keywords exist but are all empty — force regeneration by setting to null
+      await this.db.from('profile_baseline').update({ search_keywords: null }).eq('team_id', teamId);
+      console.log(`[sweep] search_keywords was empty object, reset to null for regeneration`);
+    }
 
     // Check if keyword_generation task already pending/running
     const { count } = await this.db
@@ -170,6 +180,16 @@ export class DispatchLoop {
    * Sweep: Discovery —岗位研究员 every hour
    */
   private async sweepDiscovery(teamId: string, agentMap: Map<string, string>) {
+    // M1 fix: Pre-check keywords exist before queuing discovery
+    const { data: bl } = await this.db.from('profile_baseline')
+      .select('search_keywords').eq('team_id', teamId).order('version', { ascending: false }).limit(1).single();
+    const kwCheck = bl?.search_keywords as Record<string, unknown> | null;
+    if (!kwCheck) return; // No keywords yet — wait for keyword_generation
+    const enKw = (kwCheck.en_keywords as string[]) || [];
+    const zhKw = (kwCheck.zh_keywords as string[]) || [];
+    const companies = (kwCheck.target_companies as string[]) || [];
+    if (enKw.length === 0 && zhKw.length === 0 && companies.length === 0) return; // Empty keywords
+
     const since = new Date(Date.now() - DISCOVERY_INTERVAL_MS).toISOString();
     const { count } = await this.db
       .from('agent_task')

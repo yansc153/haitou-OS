@@ -78,7 +78,7 @@ serve(async (req) => {
           .eq('id', draft.resume_asset_id)
           .single();
 
-        if (asset && asset.parse_status !== 'parsed') {
+        if (asset) {
           const { data: fileData } = await serviceClient.storage.from('resumes').download(asset.storage_path);
           if (fileData) {
             const bytes = new Uint8Array(await fileData.arrayBuffer());
@@ -162,20 +162,57 @@ serve(async (req) => {
 
     if (!baseline) {
       const pp = parsedProfile || {};
-      await serviceClient.from('profile_baseline').insert({
+      const { error: blError } = await serviceClient.from('profile_baseline').insert({
         user_id: user!.id,
         team_id: existingTeam.id,
         resume_asset_id: draft.resume_asset_id,
         version: 1,
         full_name: pp.full_name ?? user!.user_metadata?.full_name ?? null,
         contact_email: pp.contact_email ?? user!.email,
+        contact_phone: pp.contact_phone ?? null,
+        current_location: pp.current_location ?? null,
+        nationality: pp.nationality ?? null,
+        years_of_experience: pp.years_of_experience != null ? Math.round(pp.years_of_experience as number) : null,
+        seniority_level: pp.seniority_level ?? null,
+        primary_domain: pp.primary_domain ?? null,
+        headline_summary: pp.headline_summary ?? null,
         skills: pp.skills ?? [],
         experiences: pp.experiences ?? [],
         education: pp.education ?? [],
+        languages: pp.languages ?? [],
+        certifications: pp.certifications ?? [],
         inferred_role_directions: pp.inferred_role_directions ?? [],
+        capability_tags: pp.capability_tags ?? [],
+        capability_gaps: pp.capability_gaps ?? [],
         source_language: pp.source_language ?? 'en',
         parse_confidence: pp.parse_confidence ?? 'low',
+        factual_gaps: pp.factual_gaps ?? [],
       });
+      if (blError) throw new Error(`Failed to create profile_baseline: ${blError.message}`);
+    } else if (parsedProfile && Object.keys(parsedProfile).length > 3) {
+      // Baseline exists but may have stale data — update with latest parsed profile
+      await serviceClient.from('profile_baseline').update({
+        full_name: parsedProfile.full_name || null,
+        contact_email: parsedProfile.contact_email || null,
+        contact_phone: parsedProfile.contact_phone || null,
+        current_location: parsedProfile.current_location || null,
+        years_of_experience: parsedProfile.years_of_experience != null ? Math.round(parsedProfile.years_of_experience as number) : null,
+        seniority_level: parsedProfile.seniority_level || null,
+        primary_domain: parsedProfile.primary_domain || null,
+        headline_summary: parsedProfile.headline_summary || null,
+        experiences: parsedProfile.experiences || [],
+        education: parsedProfile.education || [],
+        skills: parsedProfile.skills || [],
+        languages: parsedProfile.languages || [],
+        certifications: parsedProfile.certifications || [],
+        inferred_role_directions: parsedProfile.inferred_role_directions || [],
+        capability_tags: parsedProfile.capability_tags || [],
+        capability_gaps: parsedProfile.capability_gaps || [],
+        source_language: parsedProfile.source_language || 'en',
+        parse_confidence: parsedProfile.parse_confidence || 'medium',
+        search_keywords: null, // Force keyword regeneration with new data
+        updated_at: new Date().toISOString(),
+      }).eq('team_id', existingTeam.id);
     }
 
     // Ensure submission_profile exists
@@ -208,7 +245,7 @@ serve(async (req) => {
       const allocationSeconds = PLAN_ALLOCATIONS['free'] || 21600;
 
       // Allocate runtime
-      await serviceClient.from('runtime_ledger_entry').insert({
+      const { error: ledgerErr } = await serviceClient.from('runtime_ledger_entry').insert({
         team_id: existingTeam.id,
         entry_type: 'allocation',
         runtime_delta_seconds: allocationSeconds,
@@ -216,14 +253,16 @@ serve(async (req) => {
         trigger_source: 'billing',
         reason: 'Initial free plan allocation',
       });
+      if (ledgerErr) return err(500, 'INTERNAL_ERROR', `Runtime allocation failed: ${ledgerErr.message}`);
 
       // Activate team
-      await serviceClient.from('team').update({
+      const { error: activateErr } = await serviceClient.from('team').update({
         status: 'active',
         runtime_status: 'active',
         started_at: now,
         activated_at: now,
       }).eq('id', existingTeam.id);
+      if (activateErr) return err(500, 'INTERNAL_ERROR', `Team activation failed: ${activateErr.message}`);
 
       // Session start
       await serviceClient.from('runtime_ledger_entry').insert({

@@ -533,7 +533,7 @@ export class TaskExecutor {
 
     if (!baseline) {
       await this.insertEvent(teamId, 'resume_analysis_completed', '履历分析师：未找到简历数据，无法生成关键词');
-      return { summary: '关键词生成跳过：无简历数据' };
+      throw new Error('KEYWORD_GEN_BLOCKED: No profile_baseline found — cannot generate keywords');
     }
 
     // 3. 调用 keyword-generation skill
@@ -559,7 +559,8 @@ export class TaskExecutor {
     if (!result.success) {
       // Fallback: use inferred_role_directions for EN only; leave zh_keywords empty
       // so Chinese platforms skip discovery rather than searching with English terms
-      const fallbackEn = (baseline.inferred_role_directions as string[]) || ['software engineer'];
+      const directions = baseline.inferred_role_directions as string[] | null;
+      const fallbackEn = (directions && directions.length > 0) ? directions : ['software engineer'];
       const fallback = { en_keywords: fallbackEn, zh_keywords: [] as string[], target_companies: [], primary_domain: baseline.primary_domain || 'general', seniority_bracket: baseline.seniority_level || 'mid' };
 
       await this.db
@@ -580,6 +581,17 @@ export class TaskExecutor {
       seniority_bracket: string;
       reasoning: string;
     };
+
+    // Validate keywords are not empty before saving (prevents permanent deadlock H4)
+    if ((!output.en_keywords || output.en_keywords.length === 0) &&
+        (!output.zh_keywords || output.zh_keywords.length === 0) &&
+        (!output.target_companies || output.target_companies.length === 0)) {
+      // LLM returned empty — use fallback instead
+      const directions = baseline.inferred_role_directions as string[] | null;
+      output.en_keywords = (directions && directions.length > 0) ? directions : ['software engineer'];
+      output.target_companies = [];
+      output.zh_keywords = [];
+    }
 
     await this.db
       .from('profile_baseline')
