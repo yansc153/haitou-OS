@@ -83,11 +83,14 @@ export default function ExtensionPage() {
   };
 
   // Check extension manually
+  const [checkResult, setCheckResult] = useState<string>('');
   const handleCheckExtension = async () => {
     setChecking(true);
+    setCheckResult('');
     const { installed, version } = await checkExtensionInstalled();
     setExtensionInstalled(installed);
     if (version) setExtensionVersion(version);
+    setCheckResult(installed ? '✅ 已检测到插件' : '❌ 未检测到 — 请确认已在 chrome://extensions 中加载扩展并刷新页面');
     setChecking(false);
   };
 
@@ -104,11 +107,19 @@ export default function ExtensionPage() {
 
       // Step 1: Get cookies from extension
       const cookieRes = await getCookiesForPlatform(platformCode);
-      if (cookieRes.error || cookieRes.needsLogin) {
-        const msg = cookieRes.needsLogin
-          ? `请先在浏览器中登录 ${PLATFORM_META[platformCode]?.displayName || platformCode}`
-          : `读取 Cookie 失败: ${cookieRes.error}`;
-        setConnectStatus(s => ({ ...s, [platformCode]: msg }));
+
+      if (cookieRes.error === 'no_extension' || cookieRes.error === 'not_installed' || cookieRes.error === 'timeout') {
+        setConnectStatus(s => ({ ...s, [platformCode]: '❌ 未检测到插件 — 请确认已安装并刷新此页面' }));
+        setConnecting(null);
+        return;
+      }
+      if (cookieRes.needsLogin) {
+        setConnectStatus(s => ({ ...s, [platformCode]: `⚠️ 请先在浏览器中登录 ${PLATFORM_META[platformCode]?.displayName || platformCode}，然后重试` }));
+        setConnecting(null);
+        return;
+      }
+      if (cookieRes.error) {
+        setConnectStatus(s => ({ ...s, [platformCode]: `读取失败: ${cookieRes.error}` }));
         setConnecting(null);
         return;
       }
@@ -262,13 +273,20 @@ export default function ExtensionPage() {
           )}
 
           {!extensionInstalled && (
-            <button
-              onClick={handleCheckExtension}
-              disabled={checking}
-              className="text-sm font-medium text-secondary hover:text-foreground transition-colors disabled:opacity-50"
-            >
-              {checking ? '检测中...' : '🔄 手动检测插件'}
-            </button>
+            <div className="space-y-2">
+              <button
+                onClick={handleCheckExtension}
+                disabled={checking}
+                className="text-sm font-medium text-secondary hover:text-foreground transition-colors disabled:opacity-50"
+              >
+                {checking ? '检测中...' : '🔄 手动检测插件'}
+              </button>
+              {checkResult && (
+                <p className={`text-xs ${checkResult.startsWith('✅') ? 'text-status-active' : 'text-status-warning'}`}>
+                  {checkResult}
+                </p>
+              )}
+            </div>
           )}
         </div>
       </AnimatedContent>
@@ -323,8 +341,8 @@ export default function ExtensionPage() {
                   ) : (
                     <button
                       onClick={() => handleConnect(code)}
-                      disabled={!extensionInstalled || isConnecting || !!connecting}
-                      className="text-xs bg-foreground text-background px-4 py-2 rounded-lg font-bold hover:opacity-90 disabled:opacity-30 transition-opacity shrink-0"
+                      disabled={isConnecting || !!connecting}
+                      className="text-xs bg-foreground text-background px-4 py-2 rounded-lg font-bold hover:opacity-90 disabled:opacity-50 transition-opacity shrink-0"
                     >
                       {isConnecting ? '连接中...' : '连接'}
                     </button>
