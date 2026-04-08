@@ -17,11 +17,24 @@
   "externally_connectable": {
     "matches": [
       "https://*.haitou.app/*",
+      "https://*.vercel.app/*",
       "https://*.supabase.co/*",
       "http://localhost:3000/*",
       "http://localhost:3001/*"
     ]
   },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.haitou.app/*",
+        "https://*.vercel.app/*",
+        "http://localhost:3000/*",
+        "http://localhost:3001/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
   "background": {
     "service_worker": "background.js"
   },

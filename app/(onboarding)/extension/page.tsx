@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { AnimatedContent } from '@/components/ui/animated-content';
-import { sendBridgeMessage, checkExtensionInstalled, getCookiesForPlatform } from '@/lib/bridge';
+import { checkExtensionInstalled, getCookiesForPlatform, onExtensionReady, requestExtensionCheck } from '@/lib/bridge';
 import { PLATFORM_META, PLATFORM_ORDER, NO_COOKIE_PLATFORMS, STATUS_STYLES, type PlatformEntry } from '@/lib/platform-meta';
 
 export default function ExtensionPage() {
@@ -27,19 +27,29 @@ export default function ExtensionPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
-  // Poll for extension installation
+  // Detect extension via content script event + polling fallback
   useEffect(() => {
     if (extensionInstalled) return;
+
+    // Listen for content script broadcast (instant detection)
+    const cleanup = onExtensionReady((extId) => {
+      setExtensionInstalled(true);
+      setExtensionVersion(extId ? '' : '');
+    });
+
+    // Also poll as fallback
     const poll = async () => {
+      requestExtensionCheck();
       const { installed, version } = await checkExtensionInstalled();
       if (installed) {
         setExtensionInstalled(true);
-        setExtensionVersion(version || '');
+        if (version) setExtensionVersion(version);
       }
     };
     poll();
-    const interval = setInterval(poll, 3000);
-    return () => clearInterval(interval);
+    const interval = setInterval(poll, 2000);
+
+    return () => { cleanup(); clearInterval(interval); };
   }, [extensionInstalled]);
 
   // Load platform statuses
