@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/client';
 import { getValidSession } from '@/lib/hooks/use-api';
 import { AnimatedContent } from '@/components/ui/animated-content';
 import { PIXEL_AVATARS } from '@/components/agents/pixel-avatars';
-import { useTimelineFeed } from '@/lib/hooks/use-realtime';
+import { useTimelineFeed, useAgentUpdates, useAllTimelineEvents } from '@/lib/hooks/use-realtime';
 import Link from 'next/link';
 
 type FeedItem = {
@@ -206,6 +206,10 @@ export default function TeamHomePage() {
   const [error, setError] = useState<string | null>(null);
   const [liveFeedItems, setLiveFeedItems] = useState<FeedItem[]>([]);
   const [expiringPlatforms, setExpiringPlatforms] = useState<Array<{ name: string; minutesLeft: number }>>([]);
+  // Per-agent terminal logs: roleCode → last N events
+  const [agentLogs, setAgentLogs] = useState<Record<string, Array<{ time: string; text: string }>>>({});
+  // Real-time agent status overrides
+  const [agentOverrides, setAgentOverrides] = useState<Record<string, Partial<AgentData>>>({});
 
   useEffect(() => {
     async function load() {
@@ -216,7 +220,36 @@ export default function TeamHomePage() {
           headers: { Authorization: `Bearer ${session.access_token}` },
         });
         const json = await res.json();
-        if (json.data) setData(json.data);
+        if (json.data) {
+          setData(json.data);
+          // Seed agent terminal logs from initial feed
+          const evtToRole: Record<string, string> = {
+            resume_analysis_started: 'profile_intelligence', resume_analysis_completed: 'profile_intelligence',
+            keyword_generated: 'profile_intelligence', task_keyword_generation_completed: 'profile_intelligence',
+            platform_search_started: 'opportunity_research', platform_search_completed: 'opportunity_research',
+            task_opportunity_discovery_completed: 'opportunity_research',
+            screening_started: 'matching_review', opportunity_screened: 'matching_review', task_screening_completed: 'matching_review',
+            material_started: 'materials_advisor', material_completed: 'materials_advisor', task_material_generation_completed: 'materials_advisor',
+            submission_started: 'application_executor', submission_success: 'application_executor', submission_failed: 'application_executor',
+            task_submission_completed: 'application_executor', boss_greeting_sent: 'application_executor', boss_greeting_failed: 'application_executor',
+            reply_detected: 'relationship_manager', task_reply_processing_completed: 'relationship_manager',
+            task_assigned: 'orchestrator', dispatch_assign: 'orchestrator', team_started: 'orchestrator',
+            team_paused: 'orchestrator', agent_online: 'orchestrator', agent_report: 'orchestrator',
+          };
+          const seedLogs: Record<string, Array<{ time: string; text: string }>> = {};
+          for (const item of (json.data.live_feed || []).slice(0, 30)) {
+            if (item.event_type === 'system_heartbeat') continue;
+            const role = evtToRole[item.event_type] || 'orchestrator';
+            if (!seedLogs[role]) seedLogs[role] = [];
+            if (seedLogs[role].length >= 6) continue;
+            const ts = new Date(item.occurred_at);
+            seedLogs[role].push({
+              time: `${String(ts.getHours()).padStart(2, '0')}:${String(ts.getMinutes()).padStart(2, '0')}`,
+              text: item.summary_text || EVENT_TYPE_ZH[item.event_type] || item.event_type,
+            });
+          }
+          setAgentLogs(seedLogs);
+        }
 
         // Check for expiring platform sessions
         const platformsRes = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/platforms-list`, {
@@ -257,6 +290,73 @@ export default function TeamHomePage() {
     setLiveFeedItems(prev => [newItem, ...prev].slice(0, 50));
   }, []);
   useTimelineFeed(teamId, handleNewEvent);
+
+  // Realtime: agent_instance status updates → refresh cards without reload
+  const handleAgentChange = useCallback((row: Record<string, unknown>) => {
+    const id = row.id as string;
+    setAgentOverrides(prev => ({
+      ...prev,
+      [id]: {
+        frontend_status: (row.frontend_status as string) || prev[id]?.frontend_status || '',
+        runtime_state: (row.runtime_state as string) || prev[id]?.runtime_state || '',
+        total_tasks_completed: (row.total_tasks_completed as number) ?? prev[id]?.total_tasks_completed ?? 0,
+        last_active_at: (row.last_active_at as string) || prev[id]?.last_active_at || null,
+      },
+    }));
+  }, []);
+  useAgentUpdates(teamId, handleAgentChange);
+
+  // Realtime: ALL timeline events → agent terminal logs
+  const EVT_TO_ROLE: Record<string, string> = useMemo(() => ({
+    resume_analysis_started: 'profile_intelligence',
+    resume_analysis_completed: 'profile_intelligence',
+    keyword_generated: 'profile_intelligence',
+    task_keyword_generation_completed: 'profile_intelligence',
+    platform_search_started: 'opportunity_research',
+    platform_search_completed: 'opportunity_research',
+    task_opportunity_discovery_completed: 'opportunity_research',
+    screening_started: 'matching_review',
+    opportunity_screened: 'matching_review',
+    task_screening_completed: 'matching_review',
+    material_started: 'materials_advisor',
+    material_completed: 'materials_advisor',
+    task_material_generation_completed: 'materials_advisor',
+    submission_started: 'application_executor',
+    submission_success: 'application_executor',
+    submission_failed: 'application_executor',
+    task_submission_completed: 'application_executor',
+    boss_greeting_sent: 'application_executor',
+    boss_greeting_failed: 'application_executor',
+    reply_detected: 'relationship_manager',
+    task_reply_processing_completed: 'relationship_manager',
+    task_follow_up_completed: 'relationship_manager',
+    task_first_contact_completed: 'relationship_manager',
+    task_assigned: 'orchestrator',
+    dispatch_assign: 'orchestrator',
+    team_started: 'orchestrator',
+    team_paused: 'orchestrator',
+    agent_online: 'orchestrator',
+    agent_report: 'orchestrator',
+  }), []);
+
+  const handleAllEvent = useCallback((row: Record<string, unknown>) => {
+    const evtType = row.event_type as string;
+    if (evtType === 'system_heartbeat') return;
+    const roleCode = EVT_TO_ROLE[evtType] || 'orchestrator';
+    const ts = new Date(row.occurred_at as string || Date.now());
+    const timeStr = `${String(ts.getHours()).padStart(2, '0')}:${String(ts.getMinutes()).padStart(2, '0')}`;
+    const label = EVENT_TYPE_ZH[evtType] || evtType;
+    const text = (row.summary_text as string) || label;
+
+    setAgentLogs(prev => {
+      const existing = prev[roleCode] || [];
+      return {
+        ...prev,
+        [roleCode]: [{ time: timeStr, text }, ...existing].slice(0, 6),
+      };
+    });
+  }, [EVT_TO_ROLE]);
+  useAllTimelineEvents(teamId, handleAllEvent);
 
   const isTeamActive = data?.team?.runtime_status === 'active';
   const agents: AgentData[] = data?.agents || [];
@@ -332,7 +432,13 @@ export default function TeamHomePage() {
           </div>
           <div className="flex gap-5 overflow-x-auto pb-4 snap-x hide-scrollbar">
             {agents.map((agent, i) => {
-              const isActive = agent.frontend_status === 'working' || agent.runtime_state === 'active' || (isTeamActive && agent.runtime_state !== 'sleeping');
+              // Merge realtime overrides
+              const ov = agentOverrides[agent.id];
+              const status = ov?.frontend_status || agent.frontend_status;
+              const runtimeState = ov?.runtime_state || agent.runtime_state;
+              const tasksCompleted = ov?.total_tasks_completed ?? agent.total_tasks_completed;
+              const lastActive = ov?.last_active_at || agent.last_active_at;
+              const isActive = status === 'working' || runtimeState === 'active' || (isTeamActive && runtimeState !== 'sleeping');
               const AvatarComponent = PIXEL_AVATARS[agent.template_role_code];
               return (
                 <AnimatedContent key={agent.id} delay={i * 0.06}>
@@ -373,26 +479,33 @@ export default function TeamHomePage() {
                           ? 'bg-foreground text-background'
                           : 'bg-muted text-muted-foreground'
                       }`}>
-                        {isActive ? (agent.runtime_state === 'active' ? '执行任务中' : '等待调度') : '空闲'}
+                        {isActive ? (runtimeState === 'active' ? '执行任务中' : '等待调度') : '空闲'}
                       </span>
                     </div>
 
-                    {/* Terminal output area */}
+                    {/* Terminal output area — real-time agent logs */}
                     <div className="mt-3 flex-1 overflow-hidden bg-foreground/[0.03] rounded-lg p-2.5 font-mono text-[10px] text-muted-foreground/70 leading-relaxed overflow-y-auto">
-                      {isActive ? (
-                        <>
-                          <span className="text-muted-foreground/40">[{new Date().getHours()}:{String(new Date().getMinutes()).padStart(2, '0')}]</span> READY<br />
-                          <span className="text-muted-foreground/40">[{new Date().getHours()}:{String(new Date().getMinutes()).padStart(2, '0')}]</span> SYNC: 已就绪<br />
-                        </>
-                      ) : (
-                        <span className="text-muted-foreground/30">// 暂无活跃进程</span>
-                      )}
+                      {(() => {
+                        const logs = agentLogs[agent.template_role_code];
+                        if (logs && logs.length > 0) {
+                          return logs.map((log, li) => (
+                            <div key={li} className="truncate">
+                              <span className="text-muted-foreground/40">[{log.time}]</span>{' '}
+                              <span className={li === 0 ? 'text-foreground/70' : ''}>{log.text}</span>
+                            </div>
+                          ));
+                        }
+                        if (isActive) {
+                          return <span className="text-muted-foreground/40">等待任务分配...</span>;
+                        }
+                        return <span className="text-muted-foreground/30">// 暂无活跃进程</span>;
+                      })()}
                     </div>
 
                     {/* Bottom stats */}
                     <div className="mt-3 pt-3 border-t border-border/10 flex justify-between items-center text-[10px] font-label text-muted-foreground">
-                      <span>Tasks: {agent.total_tasks_completed || 0} completed</span>
-                      <span>{agent.last_active_at ? timeAgo(agent.last_active_at) : '—'}</span>
+                      <span>Tasks: {tasksCompleted || 0} completed</span>
+                      <span>{lastActive ? timeAgo(lastActive) : '—'}</span>
                     </div>
                   </div>
                 </AnimatedContent>

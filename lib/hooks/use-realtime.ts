@@ -102,6 +102,75 @@ export function useTeamStatus(
 }
 
 /**
+ * Subscribe to agent_instance changes — status, task count, last_active_at.
+ */
+export function useAgentUpdates(
+  teamId: string | undefined,
+  onAgentChange: (agent: Record<string, unknown>) => void,
+) {
+  const supabase = useMemo(() => createClient(), []);
+  const callbackRef = useRef(onAgentChange);
+  callbackRef.current = onAgentChange;
+
+  useEffect(() => {
+    if (!teamId) return;
+
+    const channel = supabase
+      .channel(`agents:${teamId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'agent_instance',
+          filter: `team_id=eq.${teamId}`,
+        },
+        (payload) => {
+          callbackRef.current(payload.new as Record<string, unknown>);
+        },
+      )
+      .subscribe();
+
+    return () => { channel.unsubscribe(); };
+  }, [teamId, supabase]);
+}
+
+/**
+ * Subscribe to ALL timeline_event INSERTs (not just feed-visible).
+ * Used for agent card terminal logs.
+ */
+export function useAllTimelineEvents(
+  teamId: string | undefined,
+  onNewEvent: (event: Record<string, unknown>) => void,
+) {
+  const supabase = useMemo(() => createClient(), []);
+  const callbackRef = useRef(onNewEvent);
+  callbackRef.current = onNewEvent;
+
+  useEffect(() => {
+    if (!teamId) return;
+
+    const channel = supabase
+      .channel(`all-events:${teamId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'timeline_event',
+          filter: `team_id=eq.${teamId}`,
+        },
+        (payload) => {
+          callbackRef.current(payload.new as Record<string, unknown>);
+        },
+      )
+      .subscribe();
+
+    return () => { channel.unsubscribe(); };
+  }, [teamId, supabase]);
+}
+
+/**
  * Subscribe to handoff changes (new handoffs or state updates).
  */
 export function useHandoffUpdates(

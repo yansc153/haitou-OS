@@ -392,8 +392,11 @@ IMPORTANT: Respond IMMEDIATELY with JSON. Do NOT use <think> tags or reasoning b
       await sql`ALTER TABLE timeline_event ADD COLUMN IF NOT EXISTS target_agent text DEFAULT NULL`;
       await sql`ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS preferred_locations text DEFAULT NULL`;
 
+      // Enable realtime for agent_instance (status streaming to frontend)
+      await sql`DO $$ BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE agent_instance; EXCEPTION WHEN duplicate_object THEN NULL; END $$`;
+
       await sql.end();
-      return ok({ message: 'Migration complete: all pipeline + causal chain columns' });
+      return ok({ message: 'Migration complete: all pipeline + causal chain + agent realtime' });
     } catch (e) {
       return err(500, 'MIGRATION_FAILED', (e as Error).message);
     }
