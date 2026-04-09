@@ -545,7 +545,40 @@ export class TaskExecutor {
       throw new Error('ANALYZE_RESUME_BLOCKED: No profile_baseline found — cannot analyze resume');
     }
 
+    // Try to get actual resume text from the uploaded file
+    let resumeRawText = '';
+    if (baseline.resume_asset_id) {
+      const { data: asset } = await this.db
+        .from('resume_asset')
+        .select('storage_path, file_mime_type')
+        .eq('id', baseline.resume_asset_id)
+        .single();
+
+      if (asset?.storage_path) {
+        try {
+          const { data: fileData } = await this.db.storage.from('resumes').download(asset.storage_path);
+          if (fileData) {
+            resumeRawText = await fileData.text();
+            if (resumeRawText.length < 50) {
+              // Binary file — try extracting readable strings
+              const bytes = new Uint8Array(await (await this.db.storage.from('resumes').download(asset.storage_path)).data!.arrayBuffer());
+              const decoder = new TextDecoder('utf-8', { fatal: false });
+              const text = decoder.decode(bytes);
+              const runs = text.match(/[\u4e00-\u9fff\u3000-\u303fa-zA-Z0-9\s,.;:!?@#$%&*()\-+='"]{10,}/g);
+              resumeRawText = runs ? runs.join('\n') : '';
+            }
+          }
+        } catch (e) {
+          console.warn('[executor] Failed to download resume for analysis:', (e as Error).message);
+        }
+      }
+    }
+
+    // Build skill input: prefer actual resume text, fall back to baseline fields
+    const hasResumeText = resumeRawText.length > 100;
+
     const skillInput = {
+      ...(hasResumeText ? { resume_raw_text: resumeRawText.substring(0, 20000) } : {}),
       profile_baseline: {
         experiences: baseline.experiences,
         skills: baseline.skills,

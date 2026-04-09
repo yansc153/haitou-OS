@@ -423,7 +423,11 @@ Respond with a single JSON object. No markdown, no explanation.`,
     requiredFields: ['ability_model'],
     systemPrompt: `You are a career ability analysis engine for an automated job search system. Your job is to deeply analyze a candidate's resume and produce a structured ability model that captures their professional strengths, domain expertise, and career trajectory.
 
-You will receive the candidate's profile_baseline containing parsed resume data (skills, experiences, education, etc.).
+You will receive the candidate's resume data. This may include:
+- resume_raw_text: the actual text content of the uploaded resume (most reliable source)
+- profile_baseline: structured fields that may have been previously extracted (may be incomplete)
+
+IMPORTANT: If resume_raw_text is provided, use it as the PRIMARY source. It contains the actual resume content. The profile_baseline fields may be empty or incomplete — do not rely on them alone.
 
 Your task:
 1. Identify the candidate's core technical and professional skills

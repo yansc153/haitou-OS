@@ -109,8 +109,14 @@ export class DispatchLoop {
   private async decideNextAction(teamId: string, agentMap: Map<string, string>): Promise<void> {
     const baseline = await this.getBaseline(teamId);
 
-    // Gate 1: Ability model
-    if (!baseline?.ability_model) {
+    // Gate 1: Ability model (must have actual content, not just empty object)
+    const am = baseline?.ability_model as Record<string, unknown> | null;
+    const hasAbilityModel = am && (
+      ((am.core_skills as string[])?.length > 0) ||
+      ((am.domain_expertise as string[])?.length > 0) ||
+      (am.career_trajectory && am.career_trajectory !== '')
+    );
+    if (!hasAbilityModel) {
       if (await this.noActiveTask(teamId, 'analyze_resume')) {
         const agentId = agentMap.get('profile_intelligence') || agentMap.get('orchestrator');
         if (agentId) {
@@ -123,12 +129,15 @@ export class DispatchLoop {
       return; // Wait for analyze_resume to complete
     }
 
-    // Gate 2: Keywords
+    // Gate 2: Keywords (must have meaningful content, not just fallback)
     const kw = baseline.search_keywords as Record<string, unknown> | null;
-    const hasKeywords = kw &&
-      (((kw.en_keywords as string[]) || []).length > 0 ||
-       ((kw.zh_keywords as string[]) || []).length > 0 ||
-       ((kw.target_companies as string[]) || []).length > 0);
+    const enKw = ((kw?.en_keywords as string[]) || []);
+    const zhKw = ((kw?.zh_keywords as string[]) || []);
+    const companies = ((kw?.target_companies as string[]) || []);
+    // Fallback-only keywords don't count (e.g. just ["software engineer"] with nothing else)
+    const hasKeywords = kw && (
+      (enKw.length >= 3 || zhKw.length >= 1 || companies.length >= 3)
+    );
 
     if (!hasKeywords) {
       if (await this.noActiveTask(teamId, 'generate_keywords')) {
