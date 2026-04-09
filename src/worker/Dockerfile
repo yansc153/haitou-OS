@@ -14,8 +14,13 @@ RUN npx tsc -p src/worker/tsconfig.json
 # Stage 2: Production with Chromium
 FROM node:20-slim
 
-# Install Chromium system dependencies + CJK fonts
-# Full list from: npx playwright install-deps chromium
+# Install Chromium system dependencies + CJK fonts + Python (for markitdown)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-pip \
+    && pip3 install --break-system-packages 'markitdown[pdf,docx]' \
+    && rm -rf /root/.cache/pip
+
+# Chromium deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libnss3 libatk-bridge2.0-0 libdrm2 libxcomposite1 libxdamage1 \
     libxrandr2 libgbm1 libasound2 libpango-1.0-0 libcairo2 \

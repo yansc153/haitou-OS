@@ -37,6 +37,12 @@ export class BudgetService {
     const budget = PLATFORM_BUDGETS[platformCode];
     if (!budget) return true; // Unknown platform, allow
 
+    // Strategy multiplier: broad=1.0, balanced=0.6, precise=0.3
+    const { data: team } = await this.db.from('team').select('strategy_mode').eq('id', teamId).single();
+    const multiplier = team?.strategy_mode === 'broad' ? 1.0
+      : team?.strategy_mode === 'precise' ? 0.3
+      : 0.6; // balanced default
+
     const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
 
     const { data: usage } = await this.db
@@ -50,10 +56,15 @@ export class BudgetService {
 
     if (usage.budget_exhausted) return false;
 
+    // Apply strategy multiplier to caps (min 1)
+    const effApps = Math.max(1, Math.floor(budget.applications * multiplier));
+    const effMsgs = Math.max(1, Math.floor(budget.messages * multiplier));
+    const effSearches = Math.max(1, Math.floor(budget.searches * multiplier));
+
     switch (actionType) {
-      case 'application': return usage.applications_count < budget.applications;
-      case 'message': return usage.messages_count < budget.messages;
-      case 'search': return usage.searches_count < budget.searches;
+      case 'application': return usage.applications_count < effApps;
+      case 'message': return budget.messages === 0 ? true : usage.messages_count < effMsgs;
+      case 'search': return usage.searches_count < effSearches;
       default: return true;
     }
   }

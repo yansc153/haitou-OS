@@ -26,7 +26,13 @@ const HEARTBEAT_INTERVAL_MS = 5 * 60_000;          // 5 min
 const MAX_CONCURRENT_TASKS_PER_TEAM = 3;
 
 // Decision tree intervals
-const DISCOVERY_INTERVAL_MS = 5 * 60_000;           // 5 min
+function getDiscoveryInterval(strategyMode: string): number {
+  switch (strategyMode) {
+    case 'broad': return 3 * 60_000;
+    case 'precise': return 10 * 60_000;
+    default: return 5 * 60_000; // balanced
+  }
+}
 const FOLLOWUP_STALE_DAYS = 3;
 
 export class DispatchLoop {
@@ -36,6 +42,7 @@ export class DispatchLoop {
   private billingSweepTimer: ReturnType<typeof setInterval> | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private executor: TaskExecutor;
+  private discoveryBackoff = new Map<string, { zeroCount: number; nextDiscoveryAfter: number }>();
 
   constructor(
     private db: SupabaseClient,
@@ -107,6 +114,10 @@ export class DispatchLoop {
   // ================================================================
 
   private async decideNextAction(teamId: string, agentMap: Map<string, string>): Promise<void> {
+    // Read team strategy_mode for dynamic intervals and thresholds
+    const { data: teamRow } = await this.db.from('team').select('strategy_mode').eq('id', teamId).single();
+    const strategyMode = (teamRow?.strategy_mode as string) || 'balanced';
+
     const baseline = await this.getBaseline(teamId);
 
     // Gate 1: Ability model (must have actual content, not just empty object)
@@ -120,6 +131,7 @@ export class DispatchLoop {
       if (await this.noActiveTask(teamId, 'analyze_resume')) {
         const agentId = agentMap.get('profile_intelligence') || agentMap.get('orchestrator');
         if (agentId) {
+          await this.insertDispatchEvent(teamId, '履历分析师', '检测到新简历，请分析能力模型');
           await this.createTask(teamId, agentId, 'analyze_resume', 'opportunity_generation', 'critical',
             `analyze_resume:${teamId}:${Date.now()}`);
           console.log(`[decide] Gate 1: 履历分析师 -> analyze_resume for team ${teamId}`);
@@ -129,16 +141,11 @@ export class DispatchLoop {
       return; // Wait for analyze_resume to complete
     }
 
-    // Gate 2: Keywords (must have meaningful content, not just fallback)
+    // Gate 2: Keywords — check job_directions has at least 1 entry with zh + en
     // baseline is guaranteed non-null here because Gate 1 would have returned if it was
     const kw = baseline!.search_keywords as Record<string, unknown> | null;
-    const enKw = ((kw?.en_keywords as string[]) || []);
-    const zhKw = ((kw?.zh_keywords as string[]) || []);
-    const companies = ((kw?.target_companies as string[]) || []);
-    // Fallback-only keywords don't count (e.g. just ["software engineer"] with nothing else)
-    const hasKeywords = kw && (
-      (enKw.length >= 3 || zhKw.length >= 1 || companies.length >= 3)
-    );
+    const directions = (kw?.job_directions as Array<{ zh: string; en: string }>) || [];
+    const hasKeywords = directions.length >= 1 && directions.every(d => d.zh && d.en);
 
     if (!hasKeywords) {
       if (await this.noActiveTask(teamId, 'generate_keywords')) {
@@ -146,6 +153,7 @@ export class DispatchLoop {
         if (await this.noActiveTask(teamId, 'keyword_generation')) {
           const agentId = agentMap.get('opportunity_research') || agentMap.get('orchestrator');
           if (agentId) {
+            await this.insertDispatchEvent(teamId, '岗位研究员', '能力模型已就绪，请生成搜索关键词');
             await this.createTask(teamId, agentId, 'generate_keywords', 'opportunity_generation', 'critical',
               `generate_keywords:${teamId}:${Date.now()}`, undefined, undefined,
               { ability_model: baseline!.ability_model });
@@ -157,24 +165,35 @@ export class DispatchLoop {
       return; // Wait for generate_keywords to complete
     }
 
-    // Gate 3: Discovery (every DISCOVERY_INTERVAL_MS)
-    const since = new Date(Date.now() - DISCOVERY_INTERVAL_MS).toISOString();
-    const { count: recentDiscovery } = await this.db
-      .from('agent_task')
-      .select('id', { count: 'exact', head: true })
-      .eq('team_id', teamId)
-      .eq('task_type', 'opportunity_discovery')
-      .gte('created_at', since);
+    // Gate 3: Discovery (strategy-dynamic interval + zero-result backoff)
+    const baseInterval = getDiscoveryInterval(strategyMode);
+    const backoffState = this.discoveryBackoff.get(teamId) || { zeroCount: 0, nextDiscoveryAfter: 0 };
+    const effectiveInterval = Math.min(baseInterval * Math.pow(2, backoffState.zeroCount), 24 * 60 * 60_000);
+    const now = Date.now();
 
-    if (!recentDiscovery || recentDiscovery === 0) {
-      if (await this.noActiveTask(teamId, 'opportunity_discovery')) {
-        const agentId = agentMap.get('opportunity_research') || agentMap.get('orchestrator');
-        if (agentId) {
-          await this.createTask(teamId, agentId, 'opportunity_discovery', 'opportunity_generation', 'medium',
-            `discovery:${teamId}:${Date.now()}`);
-          console.log(`[decide] Gate 3: 岗位研究员 -> discovery for team ${teamId}`);
+    // Respect backoff: skip if next discovery time hasn't arrived
+    if (backoffState.nextDiscoveryAfter > now) {
+      // Skip discovery, fall through to other gates
+    } else {
+      const since = new Date(now - effectiveInterval).toISOString();
+      const { count: recentDiscovery } = await this.db
+        .from('agent_task')
+        .select('id', { count: 'exact', head: true })
+        .eq('team_id', teamId)
+        .eq('task_type', 'opportunity_discovery')
+        .gte('created_at', since);
+
+      if (!recentDiscovery || recentDiscovery === 0) {
+        if (await this.noActiveTask(teamId, 'opportunity_discovery')) {
+          const agentId = agentMap.get('opportunity_research') || agentMap.get('orchestrator');
+          if (agentId) {
+            await this.insertDispatchEvent(teamId, '岗位研究员', `开始第 ${backoffState.zeroCount > 0 ? backoffState.zeroCount + 1 : 1} 轮岗位发现 (${strategyMode}模式)`);
+            await this.createTask(teamId, agentId, 'opportunity_discovery', 'opportunity_generation', 'medium',
+              `discovery:${teamId}:${Date.now()}`);
+            console.log(`[decide] Gate 3: 岗位研究员 -> discovery for team ${teamId} (interval=${effectiveInterval}ms, backoff=${backoffState.zeroCount})`);
+          }
+          return;
         }
-        return;
       }
     }
 
@@ -502,6 +521,36 @@ export class DispatchLoop {
     });
     if (error) {
       console.error(`[dispatch] Failed to create ${taskType} task: ${error.message}`);
+    }
+  }
+
+  private async insertDispatchEvent(teamId: string, targetAgent: string, message: string): Promise<void> {
+    await this.db.from('timeline_event').insert({
+      team_id: teamId,
+      event_type: 'dispatch_assign',
+      summary_text: message,
+      actor_type: 'agent',
+      actor_name: '调度官',
+      target_agent: targetAgent,
+      visibility: 'feed',
+    });
+  }
+
+  /** Update zero-result backoff for discovery. Call after discovery task completes. */
+  async updateDiscoveryBackoff(teamId: string, newOpportunitiesFound: number, strategyMode: string): Promise<void> {
+    const current = this.discoveryBackoff.get(teamId) || { zeroCount: 0, nextDiscoveryAfter: 0 };
+    if (newOpportunitiesFound > 0) {
+      // Reset backoff on any new results
+      this.discoveryBackoff.set(teamId, { zeroCount: 0, nextDiscoveryAfter: 0 });
+    } else {
+      const newZeroCount = Math.min(current.zeroCount + 1, 8); // cap at 2^8 = 256x
+      const baseInterval = getDiscoveryInterval(strategyMode);
+      const nextDelay = Math.min(baseInterval * Math.pow(2, newZeroCount), 24 * 60 * 60_000);
+      this.discoveryBackoff.set(teamId, {
+        zeroCount: newZeroCount,
+        nextDiscoveryAfter: Date.now() + nextDelay,
+      });
+      console.log(`[dispatch] Discovery backoff for team ${teamId}: zeroCount=${newZeroCount}, nextDelay=${nextDelay}ms`);
     }
   }
 

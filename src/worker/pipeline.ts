@@ -133,6 +133,32 @@ export class PipelineOrchestrator {
     });
   }
 
+  /** Use Playwright to search Google and extract result URLs */
+  private async searchGoogle(query: string, limit: number): Promise<string[]> {
+    const { chromium } = await import('playwright');
+    const browser = await chromium.launch({ headless: true });
+    const urls: string[] = [];
+    try {
+      const page = await browser.newPage();
+      const encodedQuery = encodeURIComponent(query);
+      await page.goto(`https://www.google.com/search?q=${encodedQuery}&num=${limit}`, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      // Extract all result link hrefs from search results
+      const allHrefs = await page.locator('a[href]').evaluateAll(
+        (anchors: HTMLAnchorElement[]) => anchors.map(a => a.href).filter(h => h.startsWith('http'))
+      );
+      for (const link of allHrefs) {
+        if (link.includes('boards.greenhouse.io') || link.includes('jobs.lever.co')) {
+          if (urls.length < limit) urls.push(link);
+        }
+      }
+    } catch (e) {
+      console.warn(`[pipeline] Google search failed for "${query}":`, (e as Error).message);
+    } finally {
+      await browser.close();
+    }
+    return urls;
+  }
+
   /** Validate and execute a stage transition. Throws on illegal transition. */
   private async transitionOpportunityStage(
     opportunityId: string,
@@ -303,40 +329,57 @@ export class PipelineOrchestrator {
     pipelineMode: string
   ): Promise<void> {
     const keywords = await this.getSearchKeywords(teamId);
-    if (!keywords) return;
+    if (!keywords || keywords.en_keywords.length === 0) return;
 
-    // Use AI-generated target_companies as board slugs
-    const slugs = keywords.target_companies.map(c => companyToSlug(c));
-    // Shuffle and take 5 per cycle
-    const boards = slugs.sort(() => Math.random() - 0.5).slice(0, 5);
-    console.log(`[pipeline] greenhouse: AI keywords, boards=${boards.join(',')}`);
+    // Use Google site search to discover Greenhouse jobs
+    const searchKeywords = keywords.en_keywords.slice(0, 3);
+    console.log(`[pipeline] greenhouse: Google site search, keywords=${searchKeywords.join(', ')}`);
 
-    await this.emitEvent(teamId, 'platform_search_started', `岗位研究员开始搜索 Greenhouse（${boards.length} 个公司）`);
+    await this.emitEvent(teamId, 'platform_search_started', `岗位研究员开始搜索 Greenhouse: ${searchKeywords.join(', ')}`);
 
     let totalFound = 0;
-    for (const slug of boards) {
+    for (const keyword of searchKeywords) {
       try {
-        const jobs = await discoverGreenhouseJobs(slug, slug, { limit: 10 });
-        console.log(`[pipeline] greenhouse/${slug}: ${jobs.length} jobs`);
-        totalFound += jobs.length;
+        const query = `site:boards.greenhouse.io "${keyword}"`;
+        const urls = await this.searchGoogle(query, 10);
 
-        for (const job of jobs) {
-          if (await this.isDuplicate(teamId, job)) continue;
-          const { data: opp } = await this.db
+        for (const url of urls) {
+          const match = url.match(/boards\.greenhouse\.io\/([^/]+)\/jobs\/(\d+)/);
+          if (!match) continue;
+          const [, company, jobId] = match;
+
+          const externalRef = `greenhouse:${company}:${jobId}`;
+          const jobTitle = keyword; // Will be enriched by screening
+          const jobUrl = `https://boards.greenhouse.io/${company}/jobs/${jobId}`;
+
+          if (await this.isDuplicate(teamId, { external_ref: externalRef, company_name: company, job_title: jobTitle })) continue;
+
+          // Try to fetch job details from public API
+          let jobDetails: { title?: string; location?: string; content?: string } = {};
+          try {
+            const resp = await fetch(`https://boards-api.greenhouse.io/v1/boards/${company}/jobs/${jobId}`);
+            if (resp.ok) {
+              const data = await resp.json();
+              jobDetails = { title: data.title, location: data.location?.name, content: data.content };
+            }
+          } catch {}
+
+          await this.db
             .from('opportunity')
             .insert({
               team_id: teamId, stage: OpportunityStage.Discovered,
-              company_name: job.company_name, job_title: job.job_title,
-              location_label: job.location_label, job_description_url: job.job_description_url,
-              job_description_text: job.job_description_text,
-              source_platform_id: platform.id as string, external_ref: job.external_ref,
+              company_name: company, job_title: jobDetails.title || jobTitle,
+              location_label: jobDetails.location || '',
+              job_description_url: jobUrl,
+              job_description_text: jobDetails.content || '',
+              source_platform_id: platform.id as string, external_ref: externalRef,
               source_freshness: 'new',
             }).select('id').single();
-          if (!opp) continue;
-          // Discovery only inserts — screening is a separate task created by dispatch loop
+
+          totalFound++;
         }
       } catch (e) {
-        console.log(`[greenhouse] Board "${slug}" error — skipping: ${(e as Error).message.slice(0, 80)}`);
+        console.log(`[greenhouse] Search "${keyword}" error — skipping: ${(e as Error).message.slice(0, 80)}`);
       }
     }
     await this.emitEvent(teamId, 'platform_search_completed', `岗位研究员在 Greenhouse 搜索完成，发现 ${totalFound} 个岗位`);
@@ -344,36 +387,62 @@ export class PipelineOrchestrator {
 
   private async runLeverDiscovery(teamId: string, platform: Record<string, unknown>, pipelineMode: string): Promise<void> {
     const keywords = await this.getSearchKeywords(teamId);
-    if (!keywords) return;
+    if (!keywords || keywords.en_keywords.length === 0) return;
 
-    const slugs = keywords.target_companies.map(c => companyToSlug(c));
-    const companies = slugs.sort(() => Math.random() - 0.5).slice(0, 5);
-    console.log(`[pipeline] lever: AI keywords, slugs=${companies.join(',')}`);
+    // Use Google site search to discover Lever jobs
+    const searchKeywords = keywords.en_keywords.slice(0, 3);
+    console.log(`[pipeline] lever: Google site search, keywords=${searchKeywords.join(', ')}`);
 
-    await this.emitEvent(teamId, 'platform_search_started', `岗位研究员开始搜索 Lever（${companies.length} 个公司）`);
+    await this.emitEvent(teamId, 'platform_search_started', `岗位研究员开始搜索 Lever: ${searchKeywords.join(', ')}`);
 
     let totalFound = 0;
-    for (const slug of companies) {
+    for (const keyword of searchKeywords) {
       try {
-        const jobs = await discoverLeverJobs(slug, slug, { limit: 10 });
-        console.log(`[pipeline] lever/${slug}: ${jobs.length} jobs`);
-        totalFound += jobs.length;
-        for (const job of jobs) {
-          if (await this.isDuplicate(teamId, job)) continue;
-          const { data: opp } = await this.db
+        const query = `site:jobs.lever.co "${keyword}"`;
+        const urls = await this.searchGoogle(query, 10);
+
+        for (const url of urls) {
+          // Lever URL format: https://jobs.lever.co/{company}/{jobId}
+          const match = url.match(/jobs\.lever\.co\/([^/]+)\/([a-f0-9-]+)/);
+          if (!match) continue;
+          const [, company, jobId] = match;
+
+          const externalRef = `lever:${company}:${jobId}`;
+          const jobUrl = `https://jobs.lever.co/${company}/${jobId}`;
+
+          if (await this.isDuplicate(teamId, { external_ref: externalRef, company_name: company, job_title: keyword })) continue;
+
+          // Try to fetch job details from Lever public page
+          let jobTitle = keyword;
+          let jobLocation = '';
+          let jobDescription = '';
+          try {
+            const resp = await fetch(jobUrl);
+            if (resp.ok) {
+              const html = await resp.text();
+              const titleMatch = html.match(/<h2[^>]*>(.*?)<\/h2>/);
+              if (titleMatch) jobTitle = titleMatch[1].replace(/<[^>]+>/g, '').trim();
+              const locMatch = html.match(/class="location"[^>]*>(.*?)<\//);
+              if (locMatch) jobLocation = locMatch[1].replace(/<[^>]+>/g, '').trim();
+            }
+          } catch {}
+
+          await this.db
             .from('opportunity')
             .insert({
               team_id: teamId, stage: OpportunityStage.Discovered,
-              company_name: job.company_name, job_title: job.job_title,
-              location_label: job.location_label, job_description_url: job.job_description_url,
-              job_description_text: job.job_description_text,
-              source_platform_id: platform.id as string, external_ref: job.external_ref,
+              company_name: company, job_title: jobTitle,
+              location_label: jobLocation,
+              job_description_url: jobUrl,
+              job_description_text: jobDescription,
+              source_platform_id: platform.id as string, external_ref: externalRef,
               source_freshness: 'new',
             }).select('id').single();
-          // Discovery only inserts — screening is a separate task created by dispatch loop
+
+          totalFound++;
         }
       } catch (e) {
-        console.log(`[lever] Slug "${slug}" error — skipping: ${(e as Error).message.slice(0, 80)}`);
+        console.log(`[lever] Search "${keyword}" error — skipping: ${(e as Error).message.slice(0, 80)}`);
       }
     }
     await this.emitEvent(teamId, 'platform_search_completed', `岗位研究员在 Lever 搜索完成，发现 ${totalFound} 个岗位`);
@@ -443,19 +512,28 @@ export class PipelineOrchestrator {
     const searchKw = await this.getSearchKeywords(teamId);
     if (!searchKw || searchKw.zh_keywords.length === 0) return;
 
+    // Read preferred_locations from user_preferences
+    const { data: prefs } = await this.db
+      .from('user_preferences')
+      .select('preferred_locations')
+      .eq('team_id', teamId)
+      .single();
+    const preferredLocations = (prefs?.preferred_locations as string[]) || [];
+
     // Rotate: pick 3 keywords per cycle
     const keywordList = searchKw.zh_keywords.sort(() => Math.random() - 0.5).slice(0, 3);
-    console.log(`[pipeline] ${platformCode}: AI keywords=${keywordList.join(',')}`);
+    console.log(`[pipeline] ${platformCode}: AI keywords=${keywordList.join(',')}, locations=${preferredLocations.join(',')}`);
     await this.emitEvent(teamId, 'platform_search_started', `岗位研究员开始搜索${platformCode === 'zhaopin' ? '智联招聘' : platformCode === 'lagou' ? '拉勾' : '猎聘'}: ${keywordList.join('、')}`);
 
     let jobs: Array<{ job_title: string; company_name: string; location_label: string; job_description_url: string; job_description_text: string; external_ref: string }> = [];
 
+    const primaryCity = preferredLocations[0] || undefined;
     if (platformCode === 'zhaopin') {
-      jobs = await discoverZhaopinJobs({ sessionCookies: conn.session_token_ref, keywords: keywordList, limit: 10 });
+      jobs = await discoverZhaopinJobs({ sessionCookies: conn.session_token_ref, keywords: keywordList, limit: 10, city: primaryCity });
     } else if (platformCode === 'lagou') {
-      jobs = await discoverLagouJobs({ sessionCookies: conn.session_token_ref, keywords: keywordList, limit: 10 });
+      jobs = await discoverLagouJobs({ sessionCookies: conn.session_token_ref, keywords: keywordList, limit: 10, city: primaryCity });
     } else if (platformCode === 'liepin') {
-      jobs = await discoverLiepinJobs({ sessionCookies: conn.session_token_ref, keywords: keywordList, limit: 10 });
+      jobs = await discoverLiepinJobs({ sessionCookies: conn.session_token_ref, keywords: keywordList, limit: 10, city: primaryCity });
     }
 
     for (const job of jobs) {
@@ -508,11 +586,20 @@ export class PipelineOrchestrator {
     const searchKw = await this.getSearchKeywords(teamId);
     if (!searchKw || searchKw.zh_keywords.length === 0) return;
 
+    // Read preferred_locations for Boss
+    const { data: bossPrefs } = await this.db
+      .from('user_preferences')
+      .select('preferred_locations')
+      .eq('team_id', teamId)
+      .single();
+    const bossLocations = (bossPrefs?.preferred_locations as string[]) || [];
+
     const keywordList = searchKw.zh_keywords.sort(() => Math.random() - 0.5).slice(0, 3);
-    console.log(`[pipeline] boss_zhipin: AI keywords=${keywordList.join(',')}`);
+    console.log(`[pipeline] boss_zhipin: AI keywords=${keywordList.join(',')}, locations=${bossLocations.join(',')}`);
     await this.emitEvent(teamId, 'platform_search_started', `岗位研究员开始搜索 Boss直聘: ${keywordList.join('、')}`);
 
-    const jobs = await discoverBossJobs({ sessionCookies: conn.session_token_ref, keywords: keywordList, limit: 10 });
+    const bossPrimaryCity = bossLocations[0] || undefined;
+    const jobs = await discoverBossJobs({ sessionCookies: conn.session_token_ref, keywords: keywordList, limit: 10, city: bossPrimaryCity });
 
     for (const job of jobs) {
       if (await this.isDuplicate(teamId, job)) continue;
@@ -567,7 +654,7 @@ export class PipelineOrchestrator {
    * Boss直聘 First Contact — send greeting message (打招呼).
    * This replaces runSubmission for Boss. Stage: prioritized → contact_started.
    */
-  private async runFirstContact(
+  async runFirstContact(
     teamId: string,
     opportunityId: string,
     opportunity: Record<string, unknown>
@@ -948,18 +1035,13 @@ export class PipelineOrchestrator {
       return;
     }
 
-    // Get resume file info — resume_asset uses user_id, not team_id
-    const { data: teamForUser } = await this.db.from('team').select('user_id').eq('id', teamId).single();
-    if (!teamForUser?.user_id) {
-      console.error(`[pipeline] Cannot find user_id for team ${teamId}`);
-      return;
-    }
-    const { data: resumeAsset } = await this.db
-      .from('resume_asset')
-      .select('storage_path, file_name')
-      .eq('user_id', teamForUser.user_id)
-      .eq('is_primary', true)
+    // Determine pipeline mode for this opportunity
+    const { data: platDef } = await this.db
+      .from('platform_definition')
+      .select('pipeline_mode')
+      .eq('id', opportunity.source_platform_id as string)
       .single();
+    const oppPipelineMode = platDef?.pipeline_mode || 'full_tailored';
 
     // Get cover letter if it was generated (full_tailored)
     const { data: coverLetterMat } = await this.db
@@ -973,14 +1055,60 @@ export class PipelineOrchestrator {
       .limit(1)
       .single();
 
-    // Download resume to temp file for Playwright upload
     let resumeLocalPath = '';
-    if (resumeAsset) {
-      try {
-        resumeLocalPath = await downloadResumeToTemp(this.db, resumeAsset.storage_path, resumeAsset.file_name);
-      } catch (dlErr) {
-        console.error(`[pipeline] Resume download failed: ${dlErr instanceof Error ? dlErr.message : dlErr}`);
-        return; // Cannot submit without resume
+
+    if (oppPipelineMode === 'full_tailored') {
+      // For full_tailored: use tailored resume from material table
+      const { data: tailoredMaterial } = await this.db.from('material')
+        .select('*')
+        .eq('opportunity_id', opportunityId)
+        .eq('team_id', teamId)
+        .in('material_type', ['localized_resume', 'deep_tailored_resume', 'standard_tailored_resume', 'light_edit_resume'])
+        .eq('status', 'ready')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+
+      if (!tailoredMaterial) {
+        throw new Error('SUBMISSION_BLOCKED: No tailored resume found for full_tailored pipeline');
+      }
+
+      // If tailored material has a storage_path, download it; otherwise write content_text to temp
+      if (tailoredMaterial.storage_path) {
+        try {
+          resumeLocalPath = await downloadResumeToTemp(this.db, tailoredMaterial.storage_path, `tailored_${opportunityId}.pdf`);
+        } catch (dlErr) {
+          console.error(`[pipeline] Tailored resume download failed: ${dlErr instanceof Error ? dlErr.message : dlErr}`);
+          throw new Error('SUBMISSION_BLOCKED: Failed to download tailored resume');
+        }
+      } else if (tailoredMaterial.content_text) {
+        // Write text content to a temp file
+        const { writeFileSync } = await import('fs');
+        const tmpPath = `/tmp/tailored_resume_${opportunityId}.txt`;
+        writeFileSync(tmpPath, tailoredMaterial.content_text);
+        resumeLocalPath = tmpPath;
+      }
+    } else {
+      // For passthrough: use original resume
+      const { data: teamForUser } = await this.db.from('team').select('user_id').eq('id', teamId).single();
+      if (!teamForUser?.user_id) {
+        console.error(`[pipeline] Cannot find user_id for team ${teamId}`);
+        return;
+      }
+      const { data: resumeAsset } = await this.db
+        .from('resume_asset')
+        .select('storage_path, file_name')
+        .eq('user_id', teamForUser.user_id)
+        .eq('is_primary', true)
+        .single();
+
+      if (resumeAsset) {
+        try {
+          resumeLocalPath = await downloadResumeToTemp(this.db, resumeAsset.storage_path, resumeAsset.file_name);
+        } catch (dlErr) {
+          console.error(`[pipeline] Resume download failed: ${dlErr instanceof Error ? dlErr.message : dlErr}`);
+          return; // Cannot submit without resume
+        }
       }
     }
 

@@ -473,41 +473,47 @@ Respond with a single JSON object. No markdown, no explanation.`,
     skillCode: 'keyword-generation',
     modelTier: 'tier1',
     maxOutputTokens: 2048,
-    requiredFields: ['en_keywords', 'zh_keywords', 'target_companies', 'primary_domain', 'seniority_bracket'],
-    systemPrompt: `You are a career intelligence analyst for an automated job search system. Your job is to generate comprehensive search keywords based on a candidate's ability model that will be used to find relevant job opportunities across multiple platforms.
+    requiredFields: ['job_directions', 'en_keywords', 'zh_keywords', 'primary_domain', 'seniority_bracket'],
+    systemPrompt: `You are a career intelligence analyst for an automated job search system. Your job is to determine the best job search directions for a candidate and produce bilingual search keywords.
 
-You will receive an ability_model containing the candidate's core skills, domain expertise, capability boundary, and seniority assessment. You may also receive raw profile_baseline data for additional context.
+You will receive:
+- ability_model: the candidate's skills, domain expertise, seniority, and career trajectory
+- strategy_mode: one of "broad", "balanced", or "precise"
+- strategy_instruction: specific guidance on how many directions to generate
 
-Your task:
-1. Analyze the candidate's career trajectory, skills, and domain expertise
-2. Generate 10-20 ENGLISH search keywords for LinkedIn/Greenhouse/Lever (Western job platforms)
-3. Generate 10-20 CHINESE search keywords for 智联招聘/拉勾/猎聘/Boss直聘 (Chinese job platforms)
-4. Generate 10-30 target company names known to have public job boards on Greenhouse or Lever
-5. Determine the candidate's primary domain and seniority level
+PROCESS:
+1. Based on the ability_model, identify the candidate's CORE job directions (what roles fit them best)
+2. Based on strategy_mode, expand or narrow the directions:
+   - precise: 2-3 core directions only
+   - balanced: 3-5 directions (core + adjacent)
+   - broad: 5-7 directions (core + adjacent + transferable)
+3. For EACH direction, produce both Chinese and English versions
+   - These are the SAME role concept expressed in both languages
+   - Chinese version follows Chinese job market naming (e.g., "区块链工程师")
+   - English version follows Western job market naming (e.g., "Blockchain Engineer")
+4. Mark each direction as is_core (true/false)
 
 OUTPUT FORMAT (JSON):
 {
-  "en_keywords": ["<keyword 1>", "<keyword 2>", ...],
-  "zh_keywords": ["<关键词1>", "<关键词2>", ...],
-  "target_companies": ["<Company1>", "<Company2>", ...],
+  "job_directions": [
+    { "zh": "<中文岗位名>", "en": "<English Job Title>", "is_core": true },
+    { "zh": "<中文岗位名>", "en": "<English Job Title>", "is_core": false }
+  ],
+  "en_keywords": ["<all English titles from job_directions>"],
+  "zh_keywords": ["<all Chinese titles from job_directions>"],
   "primary_domain": "<fintech|web3|ai|saas|healthcare|ecommerce|gaming|general>",
   "seniority_bracket": "<junior|mid|senior|lead|executive>",
-  "reasoning": "<2-3 sentence explanation of why these keywords were chosen>"
+  "strategy_applied": "<broad|balanced|precise>",
+  "reasoning": "<2-3 sentence explanation>"
 }
 
-KEYWORD GENERATION RULES:
-- English keywords must match LinkedIn/Greenhouse/Lever search conventions (job titles, not skills)
-- Chinese keywords must match 智联/拉勾/Boss search conventions (职位名称, not 技能)
-- Include BOTH exact-match keywords (current role direction) AND adjacent/transferable directions
-- Do NOT generate overly generic keywords like "engineer" or "工程师" alone
-- Do NOT generate overly specific keywords that would return 0 results
-- Keywords should cover: primary role, senior/junior variants, domain-specific titles, cross-functional roles
-- Chinese keywords are NOT translations of English ones — they should reflect Chinese job market naming conventions
-
-COMPANY LIST RULES:
-- Only include companies known to have public job boards on Greenhouse (boards.greenhouse.io) or Lever (jobs.lever.co)
-- Include both well-known companies and mid-size companies in the candidate's domain
-- The company name should match the exact slug used on Greenhouse/Lever (e.g., "stripe" not "Stripe, Inc.")
+RULES:
+- en_keywords[i] and zh_keywords[i] MUST be the same role in different languages
+- Keywords are job titles, not skills (e.g., "Blockchain Engineer" not "Solidity")
+- Do NOT generate overly generic titles like "Engineer" or "工程师" alone
+- Do NOT generate overly specific titles that would return 0 results
+- Include seniority variants when appropriate (e.g., "Senior Blockchain Engineer")
+- There is NO target_companies field — we search by keywords only
 
 ${TRUTHFULNESS_LOCK}
 ${LANGUAGE_AWARENESS}

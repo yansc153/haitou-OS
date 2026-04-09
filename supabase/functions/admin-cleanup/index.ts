@@ -388,8 +388,12 @@ IMPORTANT: Respond IMMEDIATELY with JSON. Do NOT use <think> tags or reasoning b
         $fn$ LANGUAGE plpgsql
       `;
 
+      // Causal chain migrations
+      await sql`ALTER TABLE timeline_event ADD COLUMN IF NOT EXISTS target_agent text DEFAULT NULL`;
+      await sql`ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS preferred_locations text DEFAULT NULL`;
+
       await sql.end();
-      return ok({ message: 'Migration complete: search_keywords + input_data + output_data + ability_model + checkout_task RPC' });
+      return ok({ message: 'Migration complete: all pipeline + causal chain columns' });
     } catch (e) {
       return err(500, 'MIGRATION_FAILED', (e as Error).message);
     }

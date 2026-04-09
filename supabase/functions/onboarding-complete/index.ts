@@ -456,6 +456,7 @@ serve(async (req) => {
       strategy_mode: answers.strategy_mode || 'balanced',
       coverage_scope: 'cross_market',
       work_mode: answers.work_mode || 'flexible',
+      preferred_locations: answers.target_locations || null,
     });
 
     if (prefsError) throw new Error(`Failed to create preferences: ${prefsError.message}`);

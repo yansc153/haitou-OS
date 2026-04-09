@@ -11,6 +11,8 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { execSync } from 'child_process';
+import { writeFileSync, readFileSync, unlinkSync, existsSync } from 'fs';
 import {
   validateOpportunityTransition,
   validateHandoffTransition,
@@ -224,11 +226,20 @@ export class TaskExecutor {
         return { summary: `已投递「${opp.job_title}」@ ${opp.company_name}` };
       }
 
-      case 'first_contact':
+      case 'first_contact': {
+        if (!task.related_entity_id) throw new Error('first_contact requires related_entity_id');
+        await this.insertDispatchEvent(task.team_id, '投递专员', `收到打招呼任务，正在处理岗位 ${task.related_entity_id}`);
+        const { data: opp } = await this.db.from('opportunity').select('*').eq('id', task.related_entity_id).single();
+        if (!opp) throw new Error('Opportunity not found');
+        await this.pipeline.runFirstContact(task.team_id, task.related_entity_id, opp);
+        await this.insertReportEvent(task.team_id, '投递专员', `已向 ${opp.company_name} 发送打招呼消息`);
+        return { summary: `已向 ${opp.company_name} 发送打招呼消息` };
+      }
+
       case 'follow_up': {
-        const skillCode = task.task_type === 'first_contact' ? 'first-contact-drafting' : 'follow-up-drafting';
+        const skillCode = 'follow-up-drafting';
         const result = await executeSkill(skillCode, { task_context: task.input_summary });
-        return { summary: result.success ? `${task.task_type} completed` : `${task.task_type} failed: ${result.error}` };
+        return { summary: result.success ? `follow_up completed` : `follow_up failed: ${result.error}` };
       }
 
       case 'reply_processing': {
@@ -529,7 +540,7 @@ export class TaskExecutor {
   private async handleAnalyzeResume(task: AgentTask): Promise<{ summary: string; output_data?: Record<string, unknown> }> {
     const teamId = task.team_id;
 
-    await this.insertEvent(teamId, 'agent_online', '调度官已上线，检测到需要分析简历，唤醒履历分析师');
+    await this.insertDispatchEvent(teamId, '履历分析师', '检测到新简历，请分析能力模型');
     await this.insertEvent(teamId, 'resume_analysis_started', '履历分析师已上线，开始分析简历...');
 
     // Read profile_baseline
@@ -545,8 +556,8 @@ export class TaskExecutor {
       throw new Error('ANALYZE_RESUME_BLOCKED: No profile_baseline found — cannot analyze resume');
     }
 
-    // Try to get actual resume text from the uploaded file
-    let resumeRawText = '';
+    // Extract resume text via markitdown CLI
+    let resumeMarkdown = '';
     if (baseline.resume_asset_id) {
       const { data: asset } = await this.db
         .from('resume_asset')
@@ -555,44 +566,46 @@ export class TaskExecutor {
         .single();
 
       if (asset?.storage_path) {
+        const tmpPath = `/tmp/resume_${task.id}`;
+        const mdPath = `${tmpPath}.md`;
+
+        // Download from storage
+        const { data: fileData } = await this.db.storage.from('resumes').download(asset.storage_path);
+        if (!fileData) throw new Error('Failed to download resume');
+        const buffer = Buffer.from(await fileData.arrayBuffer());
+        writeFileSync(tmpPath, buffer);
+
+        // Try markitdown first
         try {
-          const { data: fileData } = await this.db.storage.from('resumes').download(asset.storage_path);
-          if (fileData) {
-            resumeRawText = await fileData.text();
-            if (resumeRawText.length < 50) {
-              // Binary file — try extracting readable strings
-              const bytes = new Uint8Array(await (await this.db.storage.from('resumes').download(asset.storage_path)).data!.arrayBuffer());
-              const decoder = new TextDecoder('utf-8', { fatal: false });
-              const text = decoder.decode(bytes);
-              const runs = text.match(/[\u4e00-\u9fff\u3000-\u303fa-zA-Z0-9\s,.;:!?@#$%&*()\-+='"]{10,}/g);
-              resumeRawText = runs ? runs.join('\n') : '';
-            }
+          execSync(`markitdown "${tmpPath}" -o "${mdPath}"`, { timeout: 30000 });
+          if (existsSync(mdPath)) {
+            resumeMarkdown = readFileSync(mdPath, 'utf-8');
           }
         } catch (e) {
-          console.warn('[executor] Failed to download resume for analysis:', (e as Error).message);
+          console.warn('[executor] markitdown failed, trying fallback:', (e as Error).message);
         }
+
+        // Fallback: read as text
+        if (resumeMarkdown.length < 50) {
+          resumeMarkdown = buffer.toString('utf-8');
+          const runs = resumeMarkdown.match(/[\u4e00-\u9fff\u3000-\u303fa-zA-Z0-9\s,.;:!?@#$%&*()\-+='"]{10,}/g);
+          resumeMarkdown = runs ? runs.join('\n') : '';
+        }
+
+        // Cleanup
+        try { unlinkSync(tmpPath); } catch {}
+        try { unlinkSync(mdPath); } catch {}
       }
     }
 
-    // Build skill input: prefer actual resume text, fall back to baseline fields
-    const hasResumeText = resumeRawText.length > 100;
+    if (resumeMarkdown.length < 50) {
+      throw new Error('ANALYZE_RESUME_FAILED: Could not extract text from resume file');
+    }
 
+    // Build skill input with extracted resume text
     const skillInput = {
-      ...(hasResumeText ? { resume_raw_text: resumeRawText.substring(0, 20000) } : {}),
-      profile_baseline: {
-        experiences: baseline.experiences,
-        skills: baseline.skills,
-        education: baseline.education,
-        primary_domain: baseline.primary_domain,
-        headline_summary: baseline.headline_summary,
-        capability_tags: baseline.capability_tags,
-        capability_gaps: baseline.capability_gaps,
-        inferred_role_directions: baseline.inferred_role_directions,
-        languages: baseline.languages,
-        certifications: baseline.certifications,
-        seniority_level: baseline.seniority_level,
-        source_language: baseline.source_language,
-      },
+      resume_raw_text: resumeMarkdown.substring(0, 20000),
+      profile_baseline: { full_name: baseline.full_name, contact_email: baseline.contact_email },
     };
 
     const result = await executeSkill('analyze-resume', skillInput);
@@ -606,10 +619,16 @@ export class TaskExecutor {
       throw new Error('ANALYZE_RESUME_FAILED: LLM returned empty ability_model');
     }
 
-    // Write ability_model to profile_baseline
+    // Write ability_model + derived fields to profile_baseline
+    const am = output.ability_model;
     await this.db
       .from('profile_baseline')
-      .update({ ability_model: output.ability_model })
+      .update({
+        ability_model: am,
+        skills: (am.core_skills as string[]) || [],
+        primary_domain: ((am.domain_expertise as string[]) || [])[0] || null,
+        seniority_level: (am.seniority_assessment as string) || null,
+      })
       .eq('id', baseline.id);
 
     // Write output_data to agent_task
@@ -618,8 +637,8 @@ export class TaskExecutor {
       .update({ output_data: output })
       .eq('id', task.id);
 
-    await this.insertEvent(teamId, 'resume_analysis_completed',
-      `履历分析师完成能力分析 — 识别出 ${(output.ability_model as Record<string, unknown>).core_skills ? ((output.ability_model as Record<string, unknown>).core_skills as string[]).length : 0} 项核心技能`);
+    const coreSkillsCount = (am.core_skills as string[])?.length || 0;
+    await this.insertReportEvent(teamId, '履历分析师', `能力分析完成 — 识别出 ${coreSkillsCount} 项核心技能`);
 
     if (result.tokens_used) {
       const { recordTokenUsage } = await import('./pipeline.js');
@@ -639,6 +658,8 @@ export class TaskExecutor {
    */
   private async handleGenerateKeywords(task: AgentTask): Promise<{ summary: string; output_data?: Record<string, unknown> }> {
     const teamId = task.team_id;
+
+    await this.insertDispatchEvent(teamId, '岗位研究员', '能力模型已就绪，请生成搜索关键词');
 
     // Read ability_model from task input_data (preferred) or profile_baseline
     let abilityModel: Record<string, unknown> | null = null;
@@ -693,26 +714,21 @@ export class TaskExecutor {
 
     await this.insertEvent(teamId, 'keyword_generation_started', '岗位研究员已上线，开始生成搜索关键词...');
 
-    // Call keyword-generation skill
-    const skillInput: Record<string, unknown> = {
-      profile_baseline: {
-        experiences: baseline.experiences,
-        skills: baseline.skills,
-        education: baseline.education,
-        primary_domain: baseline.primary_domain,
-        headline_summary: baseline.headline_summary,
-        capability_tags: baseline.capability_tags,
-        capability_gaps: baseline.capability_gaps,
-        inferred_role_directions: baseline.inferred_role_directions,
-        languages: baseline.languages,
-        certifications: baseline.certifications,
-        seniority_level: baseline.seniority_level,
-        source_language: baseline.source_language,
-      },
+    // Read team strategy_mode
+    const { data: team } = await this.db.from('team').select('strategy_mode').eq('id', teamId).single();
+    const strategyMode = (team?.strategy_mode as string) || 'balanced';
+    const STRATEGY_INSTRUCTIONS: Record<string, string> = {
+      broad: '广撒网模式: 生成 5-7 个岗位方向，包含核心、相邻和可迁移方向',
+      balanced: '均衡模式: 生成 3-5 个岗位方向，核心方向加少量相邻方向',
+      precise: '精准模式: 只生成 2-3 个最核心的岗位方向',
     };
-    if (abilityModel) {
-      skillInput.ability_model = abilityModel;
-    }
+
+    // Call keyword-generation skill with ability_model + strategy
+    const skillInput: Record<string, unknown> = {
+      ability_model: abilityModel || {},
+      strategy_mode: strategyMode,
+      strategy_instruction: STRATEGY_INSTRUCTIONS[strategyMode] || STRATEGY_INSTRUCTIONS.balanced,
+    };
 
     const result = await executeSkill('keyword-generation', skillInput);
 
@@ -720,33 +736,42 @@ export class TaskExecutor {
       // Fallback: use inferred_role_directions for EN only
       const directions = baseline.inferred_role_directions as string[] | null;
       const fallbackEn = (directions && directions.length > 0) ? directions : ['software engineer'];
-      const fallback = { en_keywords: fallbackEn, zh_keywords: [] as string[], target_companies: [], primary_domain: baseline.primary_domain || 'general', seniority_bracket: baseline.seniority_level || 'mid' };
+      const fallback = { en_keywords: fallbackEn, zh_keywords: [] as string[], job_directions: [{ zh: fallbackEn[0], en: fallbackEn[0], is_core: true }], primary_domain: baseline.primary_domain || 'general', seniority_bracket: baseline.seniority_level || 'mid', strategy_applied: strategyMode };
 
       await this.db
         .from('profile_baseline')
         .update({ search_keywords: fallback })
         .eq('id', baseline.id);
 
-      await this.insertEvent(teamId, 'keyword_generated', `关键词生成（降级模式）— 使用推断方向: ${fallbackEn.slice(0, 3).join(', ')}`);
+      await this.insertReportEvent(teamId, '岗位研究员', `关键词生成（降级模式）— 使用推断方向: ${fallbackEn.slice(0, 3).join(', ')}`);
       return { summary: `关键词生成（降级）: ${fallbackEn.length} 个方向`, output_data: fallback };
     }
 
     const output = result.output as {
+      job_directions: Array<{ zh: string; en: string; is_core?: boolean }>;
       en_keywords: string[];
       zh_keywords: string[];
-      target_companies: string[];
       primary_domain: string;
       seniority_bracket: string;
+      strategy_applied: string;
       reasoning: string;
     };
 
-    // Validate keywords are not empty (prevents permanent deadlock)
+    // Quality validation: job_directions must have at least 1 entry, each with zh + en
+    const validDirections = (output.job_directions || []).filter(d => d.zh && d.en);
+    if (validDirections.length < 1) {
+      const directions = baseline.inferred_role_directions as string[] | null;
+      const fallbackEn = (directions && directions.length > 0) ? directions : ['software engineer'];
+      output.en_keywords = output.en_keywords?.length > 0 ? output.en_keywords : fallbackEn;
+      output.zh_keywords = output.zh_keywords?.length > 0 ? output.zh_keywords : [];
+      output.job_directions = [{ zh: output.zh_keywords[0] || fallbackEn[0], en: fallbackEn[0], is_core: true }];
+    }
+
+    // Validate en/zh keywords are not both empty
     if ((!output.en_keywords || output.en_keywords.length === 0) &&
-        (!output.zh_keywords || output.zh_keywords.length === 0) &&
-        (!output.target_companies || output.target_companies.length === 0)) {
+        (!output.zh_keywords || output.zh_keywords.length === 0)) {
       const directions = baseline.inferred_role_directions as string[] | null;
       output.en_keywords = (directions && directions.length > 0) ? directions : ['software engineer'];
-      output.target_companies = [];
       output.zh_keywords = [];
     }
 
@@ -764,18 +789,17 @@ export class TaskExecutor {
     // Timeline events with keyword counts
     const enCount = output.en_keywords.length;
     const zhCount = output.zh_keywords.length;
-    const companyCount = output.target_companies.length;
+    const dirCount = output.job_directions.length;
     const enPreview = output.en_keywords.slice(0, 3).join(', ');
     const zhPreview = output.zh_keywords.slice(0, 3).join('、');
-    const companyPreview = output.target_companies.slice(0, 3).join(', ');
 
-    await this.insertEvent(teamId, 'keyword_generated',
-      `生成搜索关键词: ${enCount} 英文, ${zhCount} 中文, ${companyCount} 目标公司\n英文: ${enPreview}...\n中文: ${zhPreview}...\n目标公司: ${companyPreview}...`);
+    await this.insertReportEvent(teamId, '岗位研究员',
+      `关键词生成完成: ${dirCount} 个岗位方向, ${enCount} 英文, ${zhCount} 中文 (${strategyMode}模式)\n方向: ${output.job_directions.slice(0, 3).map(d => d.zh).join('、')}\n英文: ${enPreview}\n中文: ${zhPreview}`);
 
     await this.insertEvent(teamId, 'task_assigned',
       `调度官将 ${zhCount} 个中文关键词分配给岗位研究员（智联/拉勾/猎聘/Boss）`);
     await this.insertEvent(teamId, 'task_assigned',
-      `调度官将 ${enCount} 个英文关键词 + ${companyCount} 个目标公司分配给岗位研究员（LinkedIn/Greenhouse/Lever）`);
+      `调度官将 ${enCount} 个英文关键词分配给岗位研究员（LinkedIn/Greenhouse/Lever）`);
 
     if (result.tokens_used) {
       const { recordTokenUsage } = await import('./pipeline.js');
@@ -783,7 +807,7 @@ export class TaskExecutor {
     }
 
     return {
-      summary: `关键词生成完成: ${enCount} 英文 + ${zhCount} 中文 + ${companyCount} 公司`,
+      summary: `关键词生成完成: ${dirCount} 方向 + ${enCount} 英文 + ${zhCount} 中文 (${strategyMode})`,
       output_data: output as unknown as Record<string, unknown>,
     };
   }
@@ -794,6 +818,29 @@ export class TaskExecutor {
       event_type: eventType,
       summary_text: summaryText,
       actor_type: 'agent',
+      visibility: 'feed',
+    });
+  }
+
+  private async insertDispatchEvent(teamId: string, targetAgent: string, message: string): Promise<void> {
+    await this.db.from('timeline_event').insert({
+      team_id: teamId,
+      event_type: 'dispatch_assign',
+      summary_text: message,
+      actor_type: 'agent',
+      actor_name: '调度官',
+      target_agent: targetAgent,
+      visibility: 'feed',
+    });
+  }
+
+  private async insertReportEvent(teamId: string, agentName: string, message: string): Promise<void> {
+    await this.db.from('timeline_event').insert({
+      team_id: teamId,
+      event_type: 'agent_report',
+      summary_text: message,
+      actor_type: 'agent',
+      actor_name: agentName,
       visibility: 'feed',
     });
   }
