@@ -268,6 +268,19 @@ IMPORTANT: Respond IMMEDIATELY with JSON. Do NOT use <think> tags or reasoning b
     }
   }
 
+  if (body.action === 'reset_pipeline') {
+    // Clear ability_model + search_keywords to force Worker to re-run full causal chain
+    const { error: e1 } = await db.from('profile_baseline').update({
+      ability_model: null,
+      search_keywords: null,
+    }).neq('id', '00000000-0000-0000-0000-000000000000');
+    // Also clear completed analyze_resume/generate_keywords tasks so they can be re-created
+    await db.from('agent_task').delete()
+      .in('task_type', ['analyze_resume', 'generate_keywords', 'keyword_generation'])
+      .in('status', ['completed', 'failed']);
+    return ok({ message: 'Pipeline reset: ability_model + search_keywords cleared, tasks deleted. Worker will re-run from Gate 1.', error: e1?.message });
+  }
+
   if (body.action === 'inject_keywords') {
     // Manually inject search keywords to unblock the pipeline
     const keywords = body.keywords || {

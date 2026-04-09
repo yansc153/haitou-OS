@@ -130,7 +130,8 @@ export class DispatchLoop {
     }
 
     // Gate 2: Keywords (must have meaningful content, not just fallback)
-    const kw = baseline.search_keywords as Record<string, unknown> | null;
+    // baseline is guaranteed non-null here because Gate 1 would have returned if it was
+    const kw = baseline!.search_keywords as Record<string, unknown> | null;
     const enKw = ((kw?.en_keywords as string[]) || []);
     const zhKw = ((kw?.zh_keywords as string[]) || []);
     const companies = ((kw?.target_companies as string[]) || []);
@@ -147,7 +148,7 @@ export class DispatchLoop {
           if (agentId) {
             await this.createTask(teamId, agentId, 'generate_keywords', 'opportunity_generation', 'critical',
               `generate_keywords:${teamId}:${Date.now()}`, undefined, undefined,
-              { ability_model: baseline.ability_model });
+              { ability_model: baseline!.ability_model });
             console.log(`[decide] Gate 2: 岗位研究员 -> generate_keywords for team ${teamId}`);
           }
           return;
