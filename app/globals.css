@@ -152,3 +152,7 @@ html {
   }
   @page { size: A4; margin: 15mm; }
 }
+
+/* Hide scrollbar utility for horizontal scroll sections */
+.hide-scrollbar::-webkit-scrollbar { display: none; }
+.hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
