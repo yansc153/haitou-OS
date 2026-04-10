@@ -167,7 +167,7 @@ export class TaskExecutor {
           .eq('team_id', task.team_id)
           .eq('stage', 'discovered')
           .order('created_at', { ascending: true })
-          .limit(5);
+          .limit(10);
 
         let screened = 0;
         for (const opp of (unscreened || [])) {

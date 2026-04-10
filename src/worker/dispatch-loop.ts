@@ -19,11 +19,11 @@ import { TaskExecutor } from './task-executor.js';
 import type { BillingService } from './services/billing.js';
 
 // Production intervals
-const DISPATCH_INTERVAL_MS = 30_000;               // 30s
+const DISPATCH_INTERVAL_MS = 10_000;               // 10s — faster cycle for throughput
 const SWEEP_STALE_INTERVAL_MS = 5 * 60_000;       // 5 min
 const SWEEP_BILLING_INTERVAL_MS = 60_000;          // 60s
 const HEARTBEAT_INTERVAL_MS = 5 * 60_000;          // 5 min
-const MAX_CONCURRENT_TASKS_PER_TEAM = 3;
+const MAX_CONCURRENT_TASKS_PER_TEAM = 5;
 
 // Decision tree intervals
 function getDiscoveryInterval(strategyMode: string): number {
