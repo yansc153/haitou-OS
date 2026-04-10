@@ -185,6 +185,7 @@ export class TaskExecutor {
             console.error(`[executor] Screening failed for opp ${opp.id}:`, (e as Error).message);
           }
         }
+        console.log(`[executor] Screening batch done: ${screened}/${unscreened?.length || 0} opps screened`);
         return { summary: `批量筛选完成：${screened}/${unscreened?.length || 0} 个岗位` };
       }
 

@@ -231,6 +231,9 @@ export class DispatchLoop {
       .eq('stage', 'prioritized')
       .eq('recommendation', 'advance')
       .limit(10);
+    if (advanceOpps && advanceOpps.length > 0) {
+      console.log(`[decide] Found ${advanceOpps.length} advance opps for Gates 7/6b/5`);
+    }
 
     // Gate 7: First contact (Boss advance)
     if (advanceOpps && advanceOpps.length > 0) {

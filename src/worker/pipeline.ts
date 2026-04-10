@@ -875,6 +875,7 @@ export class PipelineOrchestrator {
     if (!opp || !baseline) return;
 
     // Step 1: Fit evaluation
+    console.log(`[screening] Starting fit-evaluation for ${opp.company_name} — ${opp.job_title}`);
     const fitResult = await executeSkill('fit-evaluation', {
       profile_baseline: baseline,
       opportunity: { job_title: opp.job_title, company_name: opp.company_name, location_label: opp.location_label, job_description_text: opp.job_description_text },
@@ -920,6 +921,7 @@ export class PipelineOrchestrator {
 
     if (recResult.success) {
       const rec = recResult.output as { recommendation: string; recommendation_reason_tags: string[]; next_step_hint: string };
+      console.log(`[screening] ${opp.company_name} — ${opp.job_title}: fit=${(fitResult.output as {fit_posture:string}).fit_posture}, rec=${rec.recommendation}`);
 
       await this.transitionOpportunityStage(opportunityId, OpportunityStage.Screened, OpportunityStage.Prioritized);
       await this.db
