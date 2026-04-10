@@ -47,7 +47,7 @@ export async function discoverZhaopinJobs(params: {
     const searchUrl = `https://sou.zhaopin.com/?kw=${encodeURIComponent(keyword)}${params.city ? `&ct=${encodeURIComponent(params.city)}` : ''}`;
 
     console.log(`[zhaopin] Navigating to search: ${searchUrl}`);
-    await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
     console.log(`[zhaopin] Page loaded, URL: ${page.url()}`);
     await randomDelay(DELAY.page[0], DELAY.page[1]);
 
@@ -58,33 +58,44 @@ export async function discoverZhaopinJobs(params: {
     console.log('[zhaopin] Auth check passed, scraping results...');
 
     const jobs: ZhaopinJob[] = [];
-    const cards = page.locator('.joblist-box__item, .contentpile__content__wrapper__item');
+    // Try multiple card selectors — zhaopin may use CSS modules
+    const cards = page.locator('.joblist-box__item, .contentpile__content__wrapper__item, .job-card-pc-container, [class*="job-card"]');
     const count = Math.min(await cards.count(), limit);
+    console.log(`[zhaopin] Found ${count} job cards on page`);
 
     for (let i = 0; i < count; i++) {
       try {
         const card = cards.nth(i);
         await card.scrollIntoViewIfNeeded();
 
-        const title = await card.locator('.jobinfo__name, .iteminfo__line1__jobname, a[data-at="job-name"]').first().textContent({ timeout: 3000 }).catch(() => '') || '';
-        const company = await card.locator('.companyinfo__name, .iteminfo__line1__compname, a[data-at="company-name"]').first().textContent({ timeout: 3000 }).catch(() => '') || '';
-        const location = await card.locator('.jobinfo__other-info-item:first-child, .iteminfo__line2__jobdesc span').first().textContent({ timeout: 3000 }).catch(() => '') || '';
-        const salary = await card.locator('.jobinfo__salary, .iteminfo__line2__jobdesc__salary, .iteminfo__line1__salary').first().textContent({ timeout: 3000 }).catch(() => '') || '';
+        // Try CSS selectors first
+        let title = await card.locator('.jobinfo__name, .iteminfo__line1__jobname, a[data-at="job-name"]').first().textContent({ timeout: 2000 }).catch(() => '') || '';
+        let company = await card.locator('.companyinfo__name, .iteminfo__line1__compname, a[data-at="company-name"]').first().textContent({ timeout: 2000 }).catch(() => '') || '';
+        let location = await card.locator('.jobinfo__other-info-item:first-child, .iteminfo__line2__jobdesc span').first().textContent({ timeout: 2000 }).catch(() => '') || '';
 
-        const linkEl = card.locator('a.jobinfo__name, a[href*="jobs.zhaopin.com"], a[href*="/jobdetail"]').first();
-        const href = await linkEl.getAttribute('href', { timeout: 3000 }).catch(() => '') || '';
+        // Fallback: parse from innerText if CSS selectors fail
+        if (!title.trim()) {
+          const cardText = await card.innerText();
+          const lines = cardText.split('\n').map(l => l.trim()).filter(Boolean);
+          title = lines[0] || '';
+          const locMatch = cardText.match(/【([^】]+)】/);
+          location = locMatch ? locMatch[1] : '';
+          company = lines.find(l => !l.includes('k') && !l.includes('K') && !l.includes('年') && !l.includes('本科') && !l.includes('硕士') && !l.includes('急聘') && !l.includes('【') && l !== title && l.length > 2 && l.length < 30) || '';
+        }
 
-        // Extract job ID from URL
-        const jobId = href.match(/\/(\d+)\.htm/)?.[1] || href.match(/jobid=(\d+)/i)?.[1] || `zhaopin-${i}`;
+        const linkEl = card.locator('a[href*="jobs.zhaopin.com"], a[href*="/jobdetail"], a[href*="/job/"]').first();
+        const href = await linkEl.getAttribute('href', { timeout: 2000 }).catch(() => '') || '';
+
+        const jobId = href.match(/\/(\d+)\.htm/)?.[1] || href.match(/jobid=(\d+)/i)?.[1] || href.match(/\/job\/(\w+)/)?.[1] || `zhaopin-${i}`;
 
         if (title.trim()) {
           jobs.push({
             job_title: title.trim(),
             company_name: company.trim(),
             location_label: location.trim(),
-            salary_text: salary.trim() || undefined,
+            salary_text: '',
             job_description_url: href.startsWith('http') ? href : `https://jobs.zhaopin.com/${jobId}.htm`,
-            job_description_text: '', // Loaded on detail page
+            job_description_text: '',
             external_ref: `zhaopin:${jobId}`,
           });
         }
@@ -131,7 +142,7 @@ export async function submitZhaopinApplication(params: {
   const page = await context.newPage();
 
   try {
-    await page.goto(params.jobUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.goto(params.jobUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await randomDelay(DELAY.page[0], DELAY.page[1]);
 
     if (isLoginPage(page)) {

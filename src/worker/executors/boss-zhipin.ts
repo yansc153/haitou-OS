@@ -87,32 +87,44 @@ export async function discoverBossJobs(params: {
     console.log('[boss] Auth + security check passed, scraping results...');
 
     const jobs: BossJob[] = [];
-    const cards = page.locator('.job-card-wrapper, .job-card-body, .search-job-result .job-card-box');
+    // Boss uses multiple card selectors across versions
+    const cards = page.locator('.job-card-wrapper, .job-card-body, .job-card-pc-container, .search-job-result .job-card-box, [class*="job-card"]');
     const count = Math.min(await cards.count(), limit);
+    console.log(`[boss] Found ${count} job cards on page`);
 
     for (let i = 0; i < count; i++) {
       try {
         const card = cards.nth(i);
         await card.scrollIntoViewIfNeeded();
-        await randomDelay(500, 1500); // Extra delay for Boss anti-scraping
+        await randomDelay(500, 1500);
 
-        const title = await card.locator('.job-name, .job-title').first().textContent() || '';
-        const company = await card.locator('.company-name a, .company-name').first().textContent() || '';
-        const location = await card.locator('.job-area, .job-area-wrapper').first().textContent() || '';
-        const salary = await card.locator('.salary, .job-limit .red').first().textContent().catch(() => '') || '';
+        // Try CSS selectors first, fall back to innerText parsing
+        let title = await card.locator('.job-name, .job-title').first().textContent().catch(() => '') || '';
+        let company = await card.locator('.company-name a, .company-name').first().textContent().catch(() => '') || '';
+        let location = await card.locator('.job-area, .job-area-wrapper').first().textContent().catch(() => '') || '';
 
-        const linkEl = card.locator('a[href*="/job_detail/"], a[ka="search_list_job"]').first();
-        const href = await linkEl.getAttribute('href') || '';
+        // Fallback: parse from innerText if CSS selectors fail (CSS Module obfuscation)
+        if (!title.trim()) {
+          const cardText = await card.innerText();
+          const lines = cardText.split('\n').map(l => l.trim()).filter(Boolean);
+          title = lines[0] || '';
+          const locMatch = cardText.match(/【([^】]+)】/);
+          location = locMatch ? locMatch[1] : '';
+          // Company is usually after salary/experience lines
+          company = lines.find(l => !l.includes('k') && !l.includes('K') && !l.includes('年') && !l.includes('本科') && !l.includes('硕士') && !l.includes('急聘') && !l.includes('【') && l !== title && l.length > 2 && l.length < 30) || '';
+        }
 
-        // Boss job IDs are in URL path: /job_detail/xxxxx.html
-        const jobId = href.match(/job_detail\/([^.]+)/)?.[1] || `boss-${i}`;
+        const linkEl = card.locator('a[href*="/job_detail/"], a[ka="search_list_job"], a[href*="/job/"]').first();
+        const href = await linkEl.getAttribute('href').catch(() => '') || '';
+
+        const jobId = href.match(/job_detail\/([^.]+)/)?.[1] || href.match(/\/job\/(\w+)/)?.[1] || `boss-${i}`;
 
         if (title.trim()) {
           jobs.push({
             job_title: title.trim(),
             company_name: company.trim(),
             location_label: location.trim(),
-            salary_text: salary.trim() || undefined,
+            salary_text: '',
             job_description_url: href.startsWith('http') ? href : `https://www.zhipin.com${href}`,
             job_description_text: '',
             external_ref: `boss:${jobId}`,

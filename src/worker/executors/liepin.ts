@@ -60,22 +60,29 @@ export async function discoverLiepinJobs(params: {
         const card = cards.nth(i);
         await card.scrollIntoViewIfNeeded();
 
-        const title = await card.locator('.job-title-box .ellipsis-1, .job-title, a[data-nick]').first().textContent() || '';
-        const company = await card.locator('.company-name, .comp-tag-box .ellipsis-1').first().textContent() || '';
-        const location = await card.locator('.job-dq, .ellipsis-1[title]').first().textContent() || '';
-        const salary = await card.locator('.job-salary, .salary-text').first().textContent().catch(() => '') || '';
-
-        const linkEl = card.locator('a[href*="/job/"], a[href*="jobid"]').first();
+        // Liepin uses CSS module obfuscation — extract via innerText + link
+        const linkEl = card.locator('a[href*="/job/"]').first();
         const href = await linkEl.getAttribute('href') || '';
+        const jobId = href.match(/\/job\/(\w+)/)?.[1] || `liepin-${i}`;
 
-        const jobId = href.match(/\/job\/(\w+)/)?.[1] || href.match(/jobid=(\w+)/i)?.[1] || `liepin-${i}`;
+        // Parse card text: line 0=title, line 1-2=location brackets, rest=salary/exp
+        const cardText = await card.innerText();
+        const lines = cardText.split('\n').map(l => l.trim()).filter(Boolean);
+        const title = lines[0] || '';
+        // Location is usually in 【...】brackets
+        const locMatch = cardText.match(/【([^】]+)】/);
+        const location = locMatch ? locMatch[1] : '';
+        // Company: find text after the salary/experience lines (usually line 7+)
+        // Use the link's closest ancestor text or fall back to later lines
+        const companyEl = card.locator('a[href*="/company/"], a[href*="/com/"]').first();
+        const company = await companyEl.textContent().catch(() => '') || lines.find(l => !l.includes('k') && !l.includes('年') && !l.includes('本科') && !l.includes('硕士') && !l.includes('急聘') && !l.includes('【') && l !== title && l.length > 2) || '';
 
-        if (title.trim()) {
+        if (title.trim() && href) {
           jobs.push({
             job_title: title.trim(),
             company_name: company.trim(),
             location_label: location.trim(),
-            salary_text: salary.trim() || undefined,
+            salary_text: '',
             job_description_url: href.startsWith('http') ? href : `https://www.liepin.com/job/${jobId}.shtml`,
             job_description_text: '',
             external_ref: `liepin:${jobId}`,

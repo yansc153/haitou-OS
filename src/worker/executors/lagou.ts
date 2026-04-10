@@ -47,7 +47,7 @@ export async function discoverLagouJobs(params: {
     const searchUrl = `https://www.lagou.com/wn/zhaopin?kd=${encodeURIComponent(keyword)}${params.city ? `&city=${encodeURIComponent(params.city)}` : ''}`;
 
     console.log(`[lagou] Navigating to search: ${searchUrl}`);
-    await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
     console.log(`[lagou] Page loaded, URL: ${page.url()}`);
     await randomDelay(DELAY.page[0], DELAY.page[1]);
 
@@ -57,30 +57,42 @@ export async function discoverLagouJobs(params: {
     console.log('[lagou] Auth check passed, scraping results...');
 
     const jobs: LagouJob[] = [];
-    const cards = page.locator('.item__10RTO, .position-list-item, .list_item_top');
+    // Try multiple selectors — lagou uses CSS module hashes
+    const cards = page.locator('.item__10RTO, .position-list-item, .list_item_top, .job-card-pc-container, [class*="job-card"], [class*="position-item"]');
     const count = Math.min(await cards.count(), limit);
+    console.log(`[lagou] Found ${count} job cards on page`);
 
     for (let i = 0; i < count; i++) {
       try {
         const card = cards.nth(i);
         await card.scrollIntoViewIfNeeded();
 
-        const title = await card.locator('.p-top__1F7CL a, .position-name, .name__LmEJu').first().textContent() || '';
-        const company = await card.locator('.company-name__2-SjF, .company_name').first().textContent() || '';
-        const location = await card.locator('.add__laeGV, .position-address').first().textContent() || '';
-        const salary = await card.locator('.money__3Lkgq, .position-salary').first().textContent().catch(() => '') || '';
+        // Try CSS selectors first
+        let title = await card.locator('.p-top__1F7CL a, .position-name, .name__LmEJu').first().textContent({ timeout: 2000 }).catch(() => '') || '';
+        let company = await card.locator('.company-name__2-SjF, .company_name').first().textContent({ timeout: 2000 }).catch(() => '') || '';
+        let location = await card.locator('.add__laeGV, .position-address').first().textContent({ timeout: 2000 }).catch(() => '') || '';
 
-        const linkEl = card.locator('a[href*="/jobs/"], a[href*="positionId"]').first();
-        const href = await linkEl.getAttribute('href') || '';
+        // Fallback: innerText parsing
+        if (!title.trim()) {
+          const cardText = await card.innerText();
+          const lines = cardText.split('\n').map(l => l.trim()).filter(Boolean);
+          title = lines[0] || '';
+          const locMatch = cardText.match(/【([^】]+)】/) || cardText.match(/\[([^\]]+)\]/);
+          location = locMatch ? locMatch[1] : '';
+          company = lines.find(l => !l.includes('k') && !l.includes('K') && !l.includes('年') && !l.includes('本科') && !l.includes('硕士') && !l.includes('急聘') && !l.includes('【') && l !== title && l.length > 2 && l.length < 30) || '';
+        }
 
-        const jobId = href.match(/\/jobs\/(\d+)/)?.[1] || href.match(/positionId=(\d+)/)?.[1] || `lagou-${i}`;
+        const linkEl = card.locator('a[href*="/jobs/"], a[href*="positionId"], a[href*="/job/"]').first();
+        const href = await linkEl.getAttribute('href', { timeout: 2000 }).catch(() => '') || '';
+
+        const jobId = href.match(/\/jobs\/(\d+)/)?.[1] || href.match(/positionId=(\d+)/)?.[1] || href.match(/\/job\/(\w+)/)?.[1] || `lagou-${i}`;
 
         if (title.trim()) {
           jobs.push({
             job_title: title.trim(),
             company_name: company.trim(),
             location_label: location.trim(),
-            salary_text: salary.trim() || undefined,
+            salary_text: '',
             job_description_url: href.startsWith('http') ? href : `https://www.lagou.com/jobs/${jobId}.html`,
             job_description_text: '',
             external_ref: `lagou:${jobId}`,
@@ -130,7 +142,7 @@ export async function submitLagouApplication(params: {
   const page = await context.newPage();
 
   try {
-    await page.goto(params.jobUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.goto(params.jobUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await randomDelay(DELAY.page[0], DELAY.page[1]);
 
     if (isLoginPage(page)) {
