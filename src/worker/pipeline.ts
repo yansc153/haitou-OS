@@ -195,10 +195,12 @@ export class PipelineOrchestrator {
         return matched;
       } catch { return []; }
     };
-    const batches = await Promise.allSettled(BOARDS.map(fetchBoard));
-    for (const b of batches) {
-      if (b.status === 'fulfilled') results.push(...b.value);
-      if (results.length >= limit) break;
+    // Fetch in batches of 10 to avoid rate limiting
+    for (let i = 0; i < BOARDS.length && results.length < limit; i += 10) {
+      const batch = await Promise.allSettled(BOARDS.slice(i, i + 10).map(fetchBoard));
+      for (const b of batch) {
+        if (b.status === 'fulfilled') results.push(...b.value);
+      }
     }
     console.log(`[greenhouse-api] keyword="${keyword}" → ${results.length} jobs from ${BOARDS.length} boards`);
     return results;
@@ -236,10 +238,12 @@ export class PipelineOrchestrator {
         return matched;
       } catch { return []; }
     };
-    const batches = await Promise.allSettled(SITES.map(fetchSite));
-    for (const b of batches) {
-      if (b.status === 'fulfilled') results.push(...b.value);
-      if (results.length >= limit) break;
+    // Fetch in batches of 10 to avoid rate limiting
+    for (let i = 0; i < SITES.length && results.length < limit; i += 10) {
+      const batch = await Promise.allSettled(SITES.slice(i, i + 10).map(fetchSite));
+      for (const b of batch) {
+        if (b.status === 'fulfilled') results.push(...b.value);
+      }
     }
     console.log(`[lever-api] keyword="${keyword}" → ${results.length} jobs from ${SITES.length} sites`);
     return results;
@@ -593,9 +597,8 @@ export class PipelineOrchestrator {
 
     let jobs: Array<{ job_title: string; company_name: string; location_label: string; job_description_url: string; job_description_text: string; external_ref: string }> = [];
 
-    // City filter: skip non-Chinese city names (e.g. "Remote")
-    const rawCity = preferredLocations[0];
-    const primaryCity = rawCity && /[\u4e00-\u9fff]/.test(rawCity) ? rawCity : undefined;
+    // City filter: find first Chinese city name (skip "Remote", pinyin, etc.)
+    const primaryCity = preferredLocations.find(loc => /[\u4e00-\u9fff]/.test(loc));
     // Search each keyword individually
     for (const kw of keywordList) {
       let batch: typeof jobs = [];
@@ -609,10 +612,11 @@ export class PipelineOrchestrator {
       jobs.push(...batch);
     }
 
+    let created = 0;
     for (const job of jobs) {
       if (await this.isDuplicate(teamId, job)) continue;
 
-      const { data: opp } = await this.db
+      await this.db
         .from('opportunity')
         .insert({
           team_id: teamId,
@@ -628,11 +632,10 @@ export class PipelineOrchestrator {
         })
         .select('id')
         .single();
-
-      // Discovery only inserts — screening is a separate task created by dispatch loop
+      created++;
     }
     const platformZh = platformCode === 'zhaopin' ? '智联招聘' : platformCode === 'lagou' ? '拉勾' : '猎聘';
-    await this.emitEvent(teamId, 'platform_search_completed', `岗位研究员在${platformZh}搜索「${keywordList[0]}」等，发现 ${jobs.length} 个岗位`);
+    await this.emitEvent(teamId, 'platform_search_completed', `岗位研究员在${platformZh}搜索「${keywordList[0]}」等，发现 ${created} 个新岗位`);
   }
 
   /**
@@ -674,19 +677,19 @@ export class PipelineOrchestrator {
     console.log(`[pipeline] boss_zhipin: search keywords=${keywordList.join(',')}, locations=${bossLocations.join(',')}`);
     await this.emitEvent(teamId, 'platform_search_started', `岗位研究员开始搜索 Boss直聘: ${keywordList.join('、')}`);
 
-    // City filter: skip non-Chinese names
-    const rawBossCity = bossLocations[0];
-    const bossPrimaryCity = rawBossCity && /[\u4e00-\u9fff]/.test(rawBossCity) ? rawBossCity : undefined;
+    // City filter: find first Chinese city name
+    const bossPrimaryCity = bossLocations.find(loc => /[\u4e00-\u9fff]/.test(loc));
     const jobs: Array<{ job_title: string; company_name: string; location_label: string; job_description_url: string; job_description_text: string; external_ref: string }> = [];
     for (const kw of keywordList) {
       const batch = await discoverBossJobs({ sessionCookies: conn.session_token_ref, keywords: [kw], limit: 5, city: bossPrimaryCity });
       jobs.push(...batch);
     }
 
+    let bossCreated = 0;
     for (const job of jobs) {
       if (await this.isDuplicate(teamId, job)) continue;
 
-      const { data: opp } = await this.db
+      await this.db
         .from('opportunity')
         .insert({
           team_id: teamId,
@@ -702,10 +705,9 @@ export class PipelineOrchestrator {
         })
         .select('id')
         .single();
-
-      // Discovery only inserts — screening is a separate task created by dispatch loop
+      bossCreated++;
     }
-    await this.emitEvent(teamId, 'platform_search_completed', `岗位研究员在 Boss直聘 搜索「${keywordList[0]}」等，发现 ${jobs.length} 个岗位`);
+    await this.emitEvent(teamId, 'platform_search_completed', `岗位研究员在 Boss直聘 搜索「${keywordList[0]}」等，发现 ${bossCreated} 个新岗位`);
   }
 
   /**
