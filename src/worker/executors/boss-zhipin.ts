@@ -72,7 +72,7 @@ export async function discoverBossJobs(params: {
   const page = await context.newPage();
 
   try {
-    const keyword = params.keywords.join(' ');
+    const keyword = params.keywords[0] || params.keywords.join(' ');
     const searchUrl = `https://www.zhipin.com/web/geek/job?query=${encodeURIComponent(keyword)}${params.city ? `&city=${encodeURIComponent(params.city)}` : ''}`;
 
     console.log(`[boss] Navigating to search: ${searchUrl}`);

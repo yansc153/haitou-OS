@@ -133,30 +133,76 @@ export class PipelineOrchestrator {
     });
   }
 
-  /** Use Playwright to search Google and extract result URLs */
-  private async searchGoogle(query: string, limit: number): Promise<string[]> {
-    const { chromium } = await import('playwright');
-    const browser = await chromium.launch({ headless: true });
-    const urls: string[] = [];
-    try {
-      const page = await browser.newPage();
-      const encodedQuery = encodeURIComponent(query);
-      await page.goto(`https://www.google.com/search?q=${encodedQuery}&num=${limit}`, { waitUntil: 'domcontentloaded', timeout: 15000 });
-      // Extract all result link hrefs from search results
-      const allHrefs = await page.locator('a[href]').evaluateAll(
-        (anchors: HTMLAnchorElement[]) => anchors.map(a => a.href).filter(h => h.startsWith('http'))
-      );
-      for (const link of allHrefs) {
-        if (link.includes('boards.greenhouse.io') || link.includes('jobs.lever.co')) {
-          if (urls.length < limit) urls.push(link);
+  /** Search Greenhouse public boards API for jobs matching a keyword */
+  private async searchGreenhouseAPI(keyword: string, limit: number): Promise<Array<{ company: string; jobId: string; title: string; location: string; url: string; content: string }>> {
+    // Well-known companies with public Greenhouse boards
+    const BOARDS = ['stripe', 'airbnb', 'cloudflare', 'figma', 'notion', 'vercel', 'databricks', 'rippling',
+      'airtable', 'plaid', 'brex', 'ramp', 'retool', 'linear', 'supabase', 'anthropic', 'openai',
+      'coinbase', 'kraken', 'chainalysis', 'consensys', 'alchemy-2', 'dapper', 'polygon-labs',
+      'gitlabinc', 'hashicorp', 'grafana-labs', 'elastic', 'twilio', 'sendgrid'];
+    const results: Array<{ company: string; jobId: string; title: string; location: string; url: string; content: string }> = [];
+    const kw = keyword.toLowerCase();
+
+    for (const board of BOARDS) {
+      if (results.length >= limit) break;
+      try {
+        const resp = await fetch(`https://boards-api.greenhouse.io/v1/boards/${board}/jobs?content=true`, { signal: AbortSignal.timeout(8000) });
+        if (!resp.ok) continue;
+        const data = await resp.json();
+        for (const job of (data.jobs || [])) {
+          if (results.length >= limit) break;
+          const title = (job.title || '').toLowerCase();
+          const content = (job.content || '').toLowerCase();
+          if (title.includes(kw) || content.includes(kw)) {
+            results.push({
+              company: board,
+              jobId: String(job.id),
+              title: job.title || keyword,
+              location: job.location?.name || '',
+              url: `https://boards.greenhouse.io/${board}/jobs/${job.id}`,
+              content: (job.content || '').slice(0, 2000),
+            });
+          }
         }
-      }
-    } catch (e) {
-      console.warn(`[pipeline] Google search failed for "${query}":`, (e as Error).message);
-    } finally {
-      await browser.close();
+      } catch { /* skip board */ }
     }
-    return urls;
+    console.log(`[greenhouse-api] keyword="${keyword}" → ${results.length} jobs from ${BOARDS.length} boards`);
+    return results;
+  }
+
+  /** Search Lever public postings API for jobs matching a keyword */
+  private async searchLeverAPI(keyword: string, limit: number): Promise<Array<{ company: string; jobId: string; title: string; location: string; url: string; content: string }>> {
+    const SITES = ['stripe', 'netflix', 'snap', 'pinterest', 'lyft', 'palantir', 'flexport', 'robinhood',
+      'blockfi', 'solana-labs', 'aptos-labs', 'sui', 'near', 'layerzero-labs', 'eigenlayer',
+      'aave', 'compound-2', 'uniswap', 'makerdao', 'lido', 'starkware-industries'];
+    const results: Array<{ company: string; jobId: string; title: string; location: string; url: string; content: string }> = [];
+    const kw = keyword.toLowerCase();
+
+    for (const site of SITES) {
+      if (results.length >= limit) break;
+      try {
+        const resp = await fetch(`https://api.lever.co/v0/postings/${site}?mode=json`, { signal: AbortSignal.timeout(8000) });
+        if (!resp.ok) continue;
+        const postings = await resp.json();
+        for (const p of (postings || [])) {
+          if (results.length >= limit) break;
+          const title = (p.text || '').toLowerCase();
+          const desc = (p.descriptionPlain || '').toLowerCase();
+          if (title.includes(kw) || desc.includes(kw)) {
+            results.push({
+              company: site,
+              jobId: p.id || '',
+              title: p.text || keyword,
+              location: p.categories?.location || '',
+              url: p.hostedUrl || `https://jobs.lever.co/${site}/${p.id}`,
+              content: (p.descriptionPlain || '').slice(0, 2000),
+            });
+          }
+        }
+      } catch { /* skip site */ }
+    }
+    console.log(`[lever-api] keyword="${keyword}" → ${results.length} jobs from ${SITES.length} sites`);
+    return results;
   }
 
   /** Validate and execute a stage transition. Throws on illegal transition. */
@@ -340,38 +386,20 @@ export class PipelineOrchestrator {
     let totalFound = 0;
     for (const keyword of searchKeywords) {
       try {
-        const query = `site:boards.greenhouse.io "${keyword}"`;
-        const urls = await this.searchGoogle(query, 10);
+        const apiResults = await this.searchGreenhouseAPI(keyword, 10);
 
-        for (const url of urls) {
-          const match = url.match(/boards\.greenhouse\.io\/([^/]+)\/jobs\/(\d+)/);
-          if (!match) continue;
-          const [, company, jobId] = match;
-
-          const externalRef = `greenhouse:${company}:${jobId}`;
-          const jobTitle = keyword; // Will be enriched by screening
-          const jobUrl = `https://boards.greenhouse.io/${company}/jobs/${jobId}`;
-
-          if (await this.isDuplicate(teamId, { external_ref: externalRef, company_name: company, job_title: jobTitle })) continue;
-
-          // Try to fetch job details from public API
-          let jobDetails: { title?: string; location?: string; content?: string } = {};
-          try {
-            const resp = await fetch(`https://boards-api.greenhouse.io/v1/boards/${company}/jobs/${jobId}`);
-            if (resp.ok) {
-              const data = await resp.json();
-              jobDetails = { title: data.title, location: data.location?.name, content: data.content };
-            }
-          } catch {}
+        for (const job of apiResults) {
+          const externalRef = `greenhouse:${job.company}:${job.jobId}`;
+          if (await this.isDuplicate(teamId, { external_ref: externalRef, company_name: job.company, job_title: job.title })) continue;
 
           await this.db
             .from('opportunity')
             .insert({
               team_id: teamId, stage: OpportunityStage.Discovered,
-              company_name: company, job_title: jobDetails.title || jobTitle,
-              location_label: jobDetails.location || '',
-              job_description_url: jobUrl,
-              job_description_text: jobDetails.content || '',
+              company_name: job.company, job_title: job.title,
+              location_label: job.location,
+              job_description_url: job.url,
+              job_description_text: job.content,
               source_platform_id: platform.id as string, external_ref: externalRef,
               source_freshness: 'new',
             }).select('id').single();
@@ -389,52 +417,29 @@ export class PipelineOrchestrator {
     const keywords = await this.getSearchKeywords(teamId);
     if (!keywords || keywords.en_keywords.length === 0) return;
 
-    // Use Google site search to discover Lever jobs
+    // Use Lever public API to discover jobs
     const searchKeywords = keywords.en_keywords.slice(0, 3);
-    console.log(`[pipeline] lever: Google site search, keywords=${searchKeywords.join(', ')}`);
+    console.log(`[pipeline] lever: API search, keywords=${searchKeywords.join(', ')}`);
 
     await this.emitEvent(teamId, 'platform_search_started', `岗位研究员开始搜索 Lever: ${searchKeywords.join(', ')}`);
 
     let totalFound = 0;
     for (const keyword of searchKeywords) {
       try {
-        const query = `site:jobs.lever.co "${keyword}"`;
-        const urls = await this.searchGoogle(query, 10);
+        const apiResults = await this.searchLeverAPI(keyword, 10);
 
-        for (const url of urls) {
-          // Lever URL format: https://jobs.lever.co/{company}/{jobId}
-          const match = url.match(/jobs\.lever\.co\/([^/]+)\/([a-f0-9-]+)/);
-          if (!match) continue;
-          const [, company, jobId] = match;
-
-          const externalRef = `lever:${company}:${jobId}`;
-          const jobUrl = `https://jobs.lever.co/${company}/${jobId}`;
-
-          if (await this.isDuplicate(teamId, { external_ref: externalRef, company_name: company, job_title: keyword })) continue;
-
-          // Try to fetch job details from Lever public page
-          let jobTitle = keyword;
-          let jobLocation = '';
-          let jobDescription = '';
-          try {
-            const resp = await fetch(jobUrl);
-            if (resp.ok) {
-              const html = await resp.text();
-              const titleMatch = html.match(/<h2[^>]*>(.*?)<\/h2>/);
-              if (titleMatch) jobTitle = titleMatch[1].replace(/<[^>]+>/g, '').trim();
-              const locMatch = html.match(/class="location"[^>]*>(.*?)<\//);
-              if (locMatch) jobLocation = locMatch[1].replace(/<[^>]+>/g, '').trim();
-            }
-          } catch {}
+        for (const job of apiResults) {
+          const externalRef = `lever:${job.company}:${job.jobId}`;
+          if (await this.isDuplicate(teamId, { external_ref: externalRef, company_name: job.company, job_title: job.title })) continue;
 
           await this.db
             .from('opportunity')
             .insert({
               team_id: teamId, stage: OpportunityStage.Discovered,
-              company_name: company, job_title: jobTitle,
-              location_label: jobLocation,
-              job_description_url: jobUrl,
-              job_description_text: jobDescription,
+              company_name: job.company, job_title: job.title,
+              location_label: job.location,
+              job_description_url: job.url,
+              job_description_text: job.content,
               source_platform_id: platform.id as string, external_ref: externalRef,
               source_freshness: 'new',
             }).select('id').single();
@@ -461,16 +466,20 @@ export class PipelineOrchestrator {
     const keywords = await this.getSearchKeywords(teamId);
     if (!keywords || keywords.en_keywords.length === 0) return;
 
-    // Pick 3 keywords per cycle (rotate)
+    // Pick 3 keywords per cycle, search each individually
     const searchTerms = keywords.en_keywords.sort(() => Math.random() - 0.5).slice(0, 3);
     console.log(`[pipeline] linkedin: AI keywords=${searchTerms.join(', ')}`);
     await this.emitEvent(teamId, 'platform_search_started', `岗位研究员开始搜索 LinkedIn: ${searchTerms.join(', ')}`);
 
-    const jobs = await discoverLinkedInJobs({
-      sessionCookies: conn$.data.session_token_ref,
-      keywords: searchTerms,
-      limit: 10,
-    });
+    const jobs: Array<{ job_title: string; company_name: string; location_label: string; job_description_url: string; job_description_text: string; external_ref: string }> = [];
+    for (const kw of searchTerms) {
+      const batch = await discoverLinkedInJobs({
+        sessionCookies: conn$.data.session_token_ref,
+        keywords: [kw],
+        limit: 5,
+      });
+      jobs.push(...batch);
+    }
 
     let created = 0;
     for (const job of jobs) {
@@ -520,7 +529,7 @@ export class PipelineOrchestrator {
       .single();
     const preferredLocations = (prefs?.preferred_locations as string[]) || [];
 
-    // Rotate: pick 3 keywords per cycle
+    // Rotate: pick 3 keywords, search each individually for broader coverage
     const keywordList = searchKw.zh_keywords.sort(() => Math.random() - 0.5).slice(0, 3);
     console.log(`[pipeline] ${platformCode}: AI keywords=${keywordList.join(',')}, locations=${preferredLocations.join(',')}`);
     await this.emitEvent(teamId, 'platform_search_started', `岗位研究员开始搜索${platformCode === 'zhaopin' ? '智联招聘' : platformCode === 'lagou' ? '拉勾' : '猎聘'}: ${keywordList.join('、')}`);
@@ -528,12 +537,17 @@ export class PipelineOrchestrator {
     let jobs: Array<{ job_title: string; company_name: string; location_label: string; job_description_url: string; job_description_text: string; external_ref: string }> = [];
 
     const primaryCity = preferredLocations[0] || undefined;
-    if (platformCode === 'zhaopin') {
-      jobs = await discoverZhaopinJobs({ sessionCookies: conn.session_token_ref, keywords: keywordList, limit: 10, city: primaryCity });
-    } else if (platformCode === 'lagou') {
-      jobs = await discoverLagouJobs({ sessionCookies: conn.session_token_ref, keywords: keywordList, limit: 10, city: primaryCity });
-    } else if (platformCode === 'liepin') {
-      jobs = await discoverLiepinJobs({ sessionCookies: conn.session_token_ref, keywords: keywordList, limit: 10, city: primaryCity });
+    // Search each keyword individually to avoid overly restrictive queries
+    for (const kw of keywordList) {
+      let batch: typeof jobs = [];
+      if (platformCode === 'zhaopin') {
+        batch = await discoverZhaopinJobs({ sessionCookies: conn.session_token_ref, keywords: [kw], limit: 5, city: primaryCity });
+      } else if (platformCode === 'lagou') {
+        batch = await discoverLagouJobs({ sessionCookies: conn.session_token_ref, keywords: [kw], limit: 5, city: primaryCity });
+      } else if (platformCode === 'liepin') {
+        batch = await discoverLiepinJobs({ sessionCookies: conn.session_token_ref, keywords: [kw], limit: 5, city: primaryCity });
+      }
+      jobs.push(...batch);
     }
 
     for (const job of jobs) {
@@ -599,7 +613,12 @@ export class PipelineOrchestrator {
     await this.emitEvent(teamId, 'platform_search_started', `岗位研究员开始搜索 Boss直聘: ${keywordList.join('、')}`);
 
     const bossPrimaryCity = bossLocations[0] || undefined;
-    const jobs = await discoverBossJobs({ sessionCookies: conn.session_token_ref, keywords: keywordList, limit: 10, city: bossPrimaryCity });
+    // Search each keyword individually for broader coverage
+    const jobs: Array<{ job_title: string; company_name: string; location_label: string; job_description_url: string; job_description_text: string; external_ref: string }> = [];
+    for (const kw of keywordList) {
+      const batch = await discoverBossJobs({ sessionCookies: conn.session_token_ref, keywords: [kw], limit: 5, city: bossPrimaryCity });
+      jobs.push(...batch);
+    }
 
     for (const job of jobs) {
       if (await this.isDuplicate(teamId, job)) continue;

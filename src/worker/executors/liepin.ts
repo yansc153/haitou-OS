@@ -38,7 +38,7 @@ export async function discoverLiepinJobs(params: {
   const page = await context.newPage();
 
   try {
-    const keyword = params.keywords.join(' ');
+    const keyword = params.keywords[0] || params.keywords.join(' ');
     const searchUrl = `https://www.liepin.com/zhaopin/?key=${encodeURIComponent(keyword)}${params.city ? `&dq=${encodeURIComponent(params.city)}` : ''}`;
 
     console.log(`[liepin] Navigating to search: ${searchUrl}`);

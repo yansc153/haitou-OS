@@ -42,7 +42,7 @@ export async function discoverLinkedInJobs(params: {
   const page = await context.newPage();
 
   try {
-    const keyword = params.keywords.join(' ');
+    const keyword = params.keywords[0] || params.keywords.join(' ');
     const searchUrl = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(keyword)}${params.location ? `&location=${encodeURIComponent(params.location)}` : ''}&f_AL=true`; // f_AL=true = Easy Apply filter
 
     await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });

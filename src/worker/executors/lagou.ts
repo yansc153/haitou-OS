@@ -43,7 +43,7 @@ export async function discoverLagouJobs(params: {
   const page = await context.newPage();
 
   try {
-    const keyword = params.keywords.join(' ');
+    const keyword = params.keywords[0] || params.keywords.join(' ');
     const searchUrl = `https://www.lagou.com/wn/zhaopin?kd=${encodeURIComponent(keyword)}${params.city ? `&city=${encodeURIComponent(params.city)}` : ''}`;
 
     console.log(`[lagou] Navigating to search: ${searchUrl}`);

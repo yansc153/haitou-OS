@@ -43,7 +43,7 @@ export async function discoverZhaopinJobs(params: {
   const page = await context.newPage();
 
   try {
-    const keyword = params.keywords.join(' ');
+    const keyword = params.keywords[0] || params.keywords.join(' ');
     const searchUrl = `https://sou.zhaopin.com/?kw=${encodeURIComponent(keyword)}${params.city ? `&ct=${encodeURIComponent(params.city)}` : ''}`;
 
     console.log(`[zhaopin] Navigating to search: ${searchUrl}`);
