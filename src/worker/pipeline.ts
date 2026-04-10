@@ -573,6 +573,8 @@ export class PipelineOrchestrator {
       .eq('status', 'active')
       .single();
 
+    const platformNameZh = platformCode === 'zhaopin' ? '智联招聘' : platformCode === 'lagou' ? '拉勾' : '猎聘';
+
     if (!conn?.session_token_ref) {
       console.warn(`[pipeline] ${platformCode}: no session_token_ref, skipping`);
       await this.emitEvent(teamId, 'platform_search_skipped', `${platformNameZh}搜索跳过: 未连接平台`);
@@ -600,7 +602,6 @@ export class PipelineOrchestrator {
     const keywordList = searchKw.zh_keywords.sort(() => Math.random() - 0.5).slice(0, 3)
       .map(kw => simplifyKeyword(kw));
     console.log(`[pipeline] ${platformCode}: search keywords=${keywordList.join(',')}, locations=${preferredLocations.join(',')}`);
-    const platformNameZh = platformCode === 'zhaopin' ? '智联招聘' : platformCode === 'lagou' ? '拉勾' : '猎聘';
     await this.emitEvent(teamId, 'platform_search_started', `岗位研究员开始搜索${platformNameZh}: ${keywordList.join('、')}`);
 
     let jobs: Array<{ job_title: string; company_name: string; location_label: string; job_description_url: string; job_description_text: string; external_ref: string }> = [];
