@@ -291,6 +291,66 @@ export default function TeamHomePage() {
     load();
   }, [supabase]);
 
+  // Polling: refresh all data every 10s when team is active
+  useEffect(() => {
+    if (!data?.team?.id || data.team.runtime_status !== 'active') return;
+    const interval = setInterval(async () => {
+      try {
+        const session = await getValidSession(supabase);
+        if (!session) return;
+        const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/home-get`, {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        const json = await res.json();
+        if (!json.data) return;
+
+        // Update agents
+        setData(prev => prev ? { ...prev, agents: json.data.agents, live_feed: json.data.live_feed, today_stats: json.data.today_stats, runtime: json.data.runtime, handoff_summary: json.data.handoff_summary } : json.data);
+
+        // Refresh agent terminal logs from latest feed
+        const evtToRole: Record<string, string> = {
+          resume_analysis_started: 'profile_intelligence', resume_analysis_completed: 'profile_intelligence',
+          keyword_generated: 'profile_intelligence', task_keyword_generation_completed: 'profile_intelligence',
+          platform_search_started: 'opportunity_research', platform_search_completed: 'opportunity_research',
+          task_opportunity_discovery_completed: 'opportunity_research',
+          screening_started: 'matching_review', opportunity_screened: 'matching_review', task_screening_completed: 'matching_review',
+          material_started: 'materials_advisor', material_completed: 'materials_advisor', task_material_generation_completed: 'materials_advisor',
+          submission_started: 'application_executor', submission_success: 'application_executor', submission_failed: 'application_executor',
+          task_submission_completed: 'application_executor', boss_greeting_sent: 'application_executor',
+          reply_detected: 'relationship_manager', task_reply_processing_completed: 'relationship_manager',
+          task_assigned: 'orchestrator', dispatch_assign: 'orchestrator', team_started: 'orchestrator',
+          team_paused: 'orchestrator', agent_online: 'orchestrator', agent_report: 'orchestrator',
+        };
+        const newLogs: Record<string, Array<{ time: string; text: string }>> = {};
+        for (const item of (json.data.live_feed || []).slice(0, 30)) {
+          if (item.event_type === 'system_heartbeat') continue;
+          const role = evtToRole[item.event_type] || 'orchestrator';
+          if (!newLogs[role]) newLogs[role] = [];
+          if (newLogs[role].length >= 6) continue;
+          const ts = new Date(item.occurred_at);
+          newLogs[role].push({
+            time: `${String(ts.getHours()).padStart(2, '0')}:${String(ts.getMinutes()).padStart(2, '0')}`,
+            text: item.summary_text || EVENT_TYPE_ZH[item.event_type] || item.event_type,
+          });
+        }
+        setAgentLogs(newLogs);
+
+        // Refresh typing indicators
+        const now = Date.now();
+        const newTyping: Record<string, number> = {};
+        for (const item of (json.data.live_feed || []).slice(0, 15)) {
+          if (item.event_type === 'system_heartbeat' || item.event_type === 'team_started' || item.event_type === 'team_paused') continue;
+          const role = evtToRole[item.event_type];
+          if (!role || newTyping[role]) continue;
+          const evtTime = new Date(item.occurred_at).getTime();
+          if (now - evtTime < 90_000) newTyping[role] = evtTime;
+        }
+        setTypingAgents(newTyping);
+      } catch { /* silent — next poll will retry */ }
+    }, 10_000);
+    return () => clearInterval(interval);
+  }, [data?.team?.id, data?.team?.runtime_status, supabase]);
+
   // Realtime: auto-append new timeline events to feed
   const teamId = data?.team?.id;
   const handleNewEvent = useCallback((event: Record<string, unknown>) => {
