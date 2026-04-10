@@ -76,7 +76,7 @@ export async function discoverBossJobs(params: {
     const searchUrl = `https://www.zhipin.com/web/geek/job?query=${encodeURIComponent(keyword)}${params.city ? `&city=${encodeURIComponent(params.city)}` : ''}`;
 
     console.log(`[boss] Navigating to search: ${searchUrl}`);
-    await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
     console.log(`[boss] Page loaded, URL: ${page.url()}`);
     await randomDelay(DELAY.page[0], DELAY.page[1]);
 

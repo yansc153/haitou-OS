@@ -40,6 +40,32 @@ type SearchKeywords = {
   job_directions: Array<{ zh: string; en: string }>;
 };
 
+/**
+ * Simplify a keyword for broader search results.
+ * "Senior Blockchain Protocol Engineer" → "blockchain protocol"
+ * "区块链协议工程师" → "区块链"
+ * "首席Substrate核心开发工程师" → "Substrate 开发"
+ */
+function simplifyKeyword(kw: string): string {
+  // English: strip seniority + generic role words, keep domain terms
+  const enNoise = /\b(senior|junior|lead|staff|principal|head|chief|associate|intern|entry.level|mid.level)\b/gi;
+  const enRoles = /\b(engineer|developer|architect|manager|specialist|analyst|consultant|director|vp)\b/gi;
+  let simplified = kw.replace(enNoise, '').trim();
+  // If after stripping roles we still have 2+ meaningful words, strip roles too
+  const withoutRoles = simplified.replace(enRoles, '').trim();
+  if (withoutRoles.split(/\s+/).filter(w => w.length > 2).length >= 1) {
+    simplified = withoutRoles;
+  }
+  // Chinese: strip seniority prefixes and generic suffixes
+  simplified = simplified
+    .replace(/^(首席|高级|资深|初级|中级|主任|副|助理)/, '')
+    .replace(/(工程师|开发者|架构师|专家|顾问|分析师|经理|总监)$/, '')
+    .trim();
+  // If result is too short (< 2 chars), return original
+  if (simplified.length < 2) return kw;
+  return simplified.replace(/\s{2,}/g, ' ').trim();
+}
+
 /** Normalize company name to Greenhouse/Lever board slug */
 function companyToSlug(company: string): string {
   return company.toLowerCase().replace(/[^a-z0-9]/g, '').replace(/inc$|ltd$|co$/, '');
@@ -146,6 +172,7 @@ export class PipelineOrchestrator {
     // Split keyword into meaningful words for broader matching
     const kwWords = keyword.toLowerCase().split(/\s+/).filter(w => w.length > 2 && !['senior', 'junior', 'lead', 'staff', 'principal', 'the', 'and', 'for'].includes(w));
 
+    const MAX_PER_BOARD = 5; // Cap per company for diversity
     // Fetch all boards in parallel (batched)
     const fetchBoard = async (board: string) => {
       try {
@@ -154,6 +181,7 @@ export class PipelineOrchestrator {
         const data = await resp.json();
         const matched: typeof results = [];
         for (const job of (data.jobs || [])) {
+          if (matched.length >= MAX_PER_BOARD) break;
           const title = (job.title || '').toLowerCase();
           const content = (job.content || '').toLowerCase();
           if (kwWords.some(w => title.includes(w) || content.includes(w))) {
@@ -184,6 +212,7 @@ export class PipelineOrchestrator {
     const results: Array<{ company: string; jobId: string; title: string; location: string; url: string; content: string }> = [];
     const kwWords = keyword.toLowerCase().split(/\s+/).filter(w => w.length > 2 && !['senior', 'junior', 'lead', 'staff', 'principal', 'the', 'and', 'for'].includes(w));
 
+    const MAX_PER_SITE = 5;
     // Fetch all sites in parallel
     const fetchSite = async (site: string) => {
       try {
@@ -192,6 +221,7 @@ export class PipelineOrchestrator {
         const postings = await resp.json();
         const matched: typeof results = [];
         for (const p of (postings || [])) {
+          if (matched.length >= MAX_PER_SITE) break;
           const title = (p.text || '').toLowerCase();
           const desc = (p.descriptionPlain || '').toLowerCase();
           if (kwWords.some(w => title.includes(w) || desc.includes(w))) {
@@ -554,15 +584,19 @@ export class PipelineOrchestrator {
     const rawLoc = prefs?.preferred_locations;
     const preferredLocations = Array.isArray(rawLoc) ? rawLoc : typeof rawLoc === 'string' && rawLoc ? rawLoc.split(',').map((s: string) => s.trim()) : [];
 
-    // Rotate: pick 3 keywords, search each individually for broader coverage
-    const keywordList = searchKw.zh_keywords.sort(() => Math.random() - 0.5).slice(0, 3);
-    console.log(`[pipeline] ${platformCode}: AI keywords=${keywordList.join(',')}, locations=${preferredLocations.join(',')}`);
-    await this.emitEvent(teamId, 'platform_search_started', `岗位研究员开始搜索${platformCode === 'zhaopin' ? '智联招聘' : platformCode === 'lagou' ? '拉勾' : '猎聘'}: ${keywordList.join('、')}`);
+    // Simplify keywords for broader search — "区块链协议工程师" → "区块链"
+    const keywordList = searchKw.zh_keywords.sort(() => Math.random() - 0.5).slice(0, 3)
+      .map(kw => simplifyKeyword(kw));
+    console.log(`[pipeline] ${platformCode}: search keywords=${keywordList.join(',')}, locations=${preferredLocations.join(',')}`);
+    const platformNameZh = platformCode === 'zhaopin' ? '智联招聘' : platformCode === 'lagou' ? '拉勾' : '猎聘';
+    await this.emitEvent(teamId, 'platform_search_started', `岗位研究员开始搜索${platformNameZh}: ${keywordList.join('、')}`);
 
     let jobs: Array<{ job_title: string; company_name: string; location_label: string; job_description_url: string; job_description_text: string; external_ref: string }> = [];
 
-    const primaryCity = preferredLocations[0] || undefined;
-    // Search each keyword individually to avoid overly restrictive queries
+    // City filter: skip non-Chinese city names (e.g. "Remote")
+    const rawCity = preferredLocations[0];
+    const primaryCity = rawCity && /[\u4e00-\u9fff]/.test(rawCity) ? rawCity : undefined;
+    // Search each keyword individually
     for (const kw of keywordList) {
       let batch: typeof jobs = [];
       if (platformCode === 'zhaopin') {
@@ -634,12 +668,15 @@ export class PipelineOrchestrator {
     const rawBossLoc = bossPrefs?.preferred_locations;
     const bossLocations = Array.isArray(rawBossLoc) ? rawBossLoc : typeof rawBossLoc === 'string' && rawBossLoc ? rawBossLoc.split(',').map((s: string) => s.trim()) : [];
 
-    const keywordList = searchKw.zh_keywords.sort(() => Math.random() - 0.5).slice(0, 3);
-    console.log(`[pipeline] boss_zhipin: AI keywords=${keywordList.join(',')}, locations=${bossLocations.join(',')}`);
+    // Simplify keywords for broader search
+    const keywordList = searchKw.zh_keywords.sort(() => Math.random() - 0.5).slice(0, 3)
+      .map(kw => simplifyKeyword(kw));
+    console.log(`[pipeline] boss_zhipin: search keywords=${keywordList.join(',')}, locations=${bossLocations.join(',')}`);
     await this.emitEvent(teamId, 'platform_search_started', `岗位研究员开始搜索 Boss直聘: ${keywordList.join('、')}`);
 
-    const bossPrimaryCity = bossLocations[0] || undefined;
-    // Search each keyword individually for broader coverage
+    // City filter: skip non-Chinese names
+    const rawBossCity = bossLocations[0];
+    const bossPrimaryCity = rawBossCity && /[\u4e00-\u9fff]/.test(rawBossCity) ? rawBossCity : undefined;
     const jobs: Array<{ job_title: string; company_name: string; location_label: string; job_description_url: string; job_description_text: string; external_ref: string }> = [];
     for (const kw of keywordList) {
       const batch = await discoverBossJobs({ sessionCookies: conn.session_token_ref, keywords: [kw], limit: 5, city: bossPrimaryCity });
