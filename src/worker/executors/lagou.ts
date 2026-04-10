@@ -47,7 +47,7 @@ export async function discoverLagouJobs(params: {
     const searchUrl = `https://www.lagou.com/wn/zhaopin?kd=${encodeURIComponent(keyword)}${params.city ? `&city=${encodeURIComponent(params.city)}` : ''}`;
 
     console.log(`[lagou] Navigating to search: ${searchUrl}`);
-    await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
     console.log(`[lagou] Page loaded, URL: ${page.url()}`);
     await randomDelay(DELAY.page[0], DELAY.page[1]);
 
@@ -65,7 +65,7 @@ export async function discoverLagouJobs(params: {
     for (let i = 0; i < count; i++) {
       try {
         const card = cards.nth(i);
-        await card.scrollIntoViewIfNeeded();
+        await card.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {});
 
         // Try CSS selectors first
         let title = await card.locator('.p-top__1F7CL a, .position-name, .name__LmEJu').first().textContent({ timeout: 2000 }).catch(() => '') || '';
@@ -135,7 +135,7 @@ export async function submitLagouApplication(params: {
   const page = await context.newPage();
 
   try {
-    await page.goto(params.jobUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.goto(params.jobUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
     await randomDelay(DELAY.page[0], DELAY.page[1]);
 
     if (isLoginPage(page)) {

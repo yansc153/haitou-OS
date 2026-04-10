@@ -47,7 +47,7 @@ export async function discoverZhaopinJobs(params: {
     const searchUrl = `https://sou.zhaopin.com/?kw=${encodeURIComponent(keyword)}${params.city ? `&ct=${encodeURIComponent(params.city)}` : ''}`;
 
     console.log(`[zhaopin] Navigating to search: ${searchUrl}`);
-    await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
     console.log(`[zhaopin] Page loaded, URL: ${page.url()}`);
     await randomDelay(DELAY.page[0], DELAY.page[1]);
 
@@ -66,7 +66,7 @@ export async function discoverZhaopinJobs(params: {
     for (let i = 0; i < count; i++) {
       try {
         const card = cards.nth(i);
-        await card.scrollIntoViewIfNeeded();
+        await card.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {});
 
         // Try CSS selectors first
         let title = await card.locator('.jobinfo__name, .iteminfo__line1__jobname, a[data-at="job-name"]').first().textContent({ timeout: 2000 }).catch(() => '') || '';
@@ -136,7 +136,7 @@ export async function submitZhaopinApplication(params: {
   const page = await context.newPage();
 
   try {
-    await page.goto(params.jobUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.goto(params.jobUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
     await randomDelay(DELAY.page[0], DELAY.page[1]);
 
     if (isLoginPage(page)) {
