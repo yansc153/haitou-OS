@@ -86,7 +86,7 @@ export async function discoverLagouJobs(params: {
             external_ref: `lagou:${jobId}`,
           });
         }
-      } catch { /* skip card */ }
+      } catch (e) { console.warn('[lagou] Card parse failed:', (e as Error).message); }
     }
 
     // Load JD for top results
@@ -96,7 +96,7 @@ export async function discoverLagouJobs(params: {
         await randomDelay(DELAY.page[0], DELAY.page[1]);
         const jd = await page.locator('.job-detail, .job_bt, .position-content').first().textContent();
         job.job_description_text = jd?.trim() || '';
-      } catch { /* skip detail */ }
+      } catch (e) { console.warn('[lagou] Detail fetch failed:', (e as Error).message); }
     }
 
     console.log(`[lagou] Discovery complete: ${jobs.length} jobs found`);

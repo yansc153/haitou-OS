@@ -118,7 +118,7 @@ export async function discoverBossJobs(params: {
             external_ref: `boss:${jobId}`,
           });
         }
-      } catch { /* skip card */ }
+      } catch (e) { console.warn('[boss] Card parse failed:', (e as Error).message); }
     }
 
     // Load JD for top results (fewer than other platforms due to anti-scraping)
@@ -134,7 +134,7 @@ export async function discoverBossJobs(params: {
 
         const jd = await page.locator('.job-sec-text, .job-detail-section .text, .job-detail .detail-content').first().textContent();
         job.job_description_text = jd?.trim() || '';
-      } catch { /* skip detail */ }
+      } catch (e) { console.warn('[boss] Detail fetch failed:', (e as Error).message); }
     }
 
     console.log(`[boss] Discovery complete: ${jobs.length} jobs found`);

@@ -103,7 +103,7 @@ export async function discoverLinkedInJobs(params: {
 
         const jd = await page.locator('.jobs-description__content, .jobs-box__html-content, .jobs-description-content__text').first().textContent();
         job.job_description_text = jd?.trim() || '';
-      } catch { /* skip detail */ }
+      } catch (e) { console.warn('[linkedin] Detail fetch failed:', (e as Error).message); }
     }
 
     return jobs;

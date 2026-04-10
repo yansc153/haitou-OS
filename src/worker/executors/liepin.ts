@@ -81,7 +81,7 @@ export async function discoverLiepinJobs(params: {
             external_ref: `liepin:${jobId}`,
           });
         }
-      } catch { /* skip card */ }
+      } catch (e) { console.warn('[liepin] Card parse failed:', (e as Error).message); }
     }
 
     // Load JD for top results
@@ -91,7 +91,7 @@ export async function discoverLiepinJobs(params: {
         await randomDelay(DELAY.page[0], DELAY.page[1]);
         const jd = await page.locator('.job-intro-container, .job-description, .job-qualifications').first().textContent();
         job.job_description_text = jd?.trim() || '';
-      } catch { /* skip detail */ }
+      } catch (e) { console.warn('[liepin] Detail fetch failed:', (e as Error).message); }
     }
 
     console.log(`[liepin] Discovery complete: ${jobs.length} jobs found`);

@@ -88,7 +88,7 @@ export async function discoverZhaopinJobs(params: {
             external_ref: `zhaopin:${jobId}`,
           });
         }
-      } catch { /* skip card */ }
+      } catch (e) { console.warn('[zhaopin] Card parse failed:', (e as Error).message); }
     }
 
     // Load JD text for top results
@@ -98,7 +98,7 @@ export async function discoverZhaopinJobs(params: {
         await randomDelay(DELAY.page[0], DELAY.page[1]);
         const jd = await page.locator('.describtion__detail-content, .job-detail__content, .pos-ul').first().textContent();
         job.job_description_text = jd?.trim() || '';
-      } catch { /* skip detail */ }
+      } catch (e) { console.warn('[zhaopin] Detail fetch failed:', (e as Error).message); }
     }
 
     console.log(`[zhaopin] Discovery complete: ${jobs.length} jobs found`);

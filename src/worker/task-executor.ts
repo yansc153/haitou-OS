@@ -133,9 +133,10 @@ export class TaskExecutor {
       case 'keyword_generation':
         return await this.handleGenerateKeywords(task);
 
-      case 'opportunity_discovery':
-        await this.pipeline.runDiscoveryCycle(task.team_id);
-        return { summary: '岗位发现周期完成' };
+      case 'opportunity_discovery': {
+        const discoveredCount = await this.pipeline.runDiscoveryCycle(task.team_id);
+        return { summary: `岗位发现周期完成，新增 ${discoveredCount} 个岗位` };
+      }
 
       case 'screening': {
         if (task.related_entity_id) {

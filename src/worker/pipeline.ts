@@ -37,6 +37,7 @@ type SearchKeywords = {
   target_companies: string[];
   primary_domain: string;
   seniority_bracket: string;
+  job_directions: Array<{ zh: string; en: string }>;
 };
 
 /** Normalize company name to Greenhouse/Lever board slug */
@@ -117,6 +118,7 @@ export class PipelineOrchestrator {
       target_companies: (kw.target_companies as string[]) || [],
       primary_domain: (kw.primary_domain as string) || 'general',
       seniority_bracket: (kw.seniority_bracket as string) || 'mid',
+      job_directions: (kw.job_directions as Array<{ zh: string; en: string }>) || [],
     };
   }
 
@@ -144,30 +146,31 @@ export class PipelineOrchestrator {
     // Split keyword into meaningful words for broader matching
     const kwWords = keyword.toLowerCase().split(/\s+/).filter(w => w.length > 2 && !['senior', 'junior', 'lead', 'staff', 'principal', 'the', 'and', 'for'].includes(w));
 
-    for (const board of BOARDS) {
-      if (results.length >= limit) break;
+    // Fetch all boards in parallel (batched)
+    const fetchBoard = async (board: string) => {
       try {
         const resp = await fetch(`https://boards-api.greenhouse.io/v1/boards/${board}/jobs?content=true`, { signal: AbortSignal.timeout(8000) });
-        if (!resp.ok) continue;
+        if (!resp.ok) return [];
         const data = await resp.json();
+        const matched: typeof results = [];
         for (const job of (data.jobs || [])) {
-          if (results.length >= limit) break;
           const title = (job.title || '').toLowerCase();
           const content = (job.content || '').toLowerCase();
-          // Match if ANY significant keyword word appears in title or content
-          const matches = kwWords.some(w => title.includes(w) || content.includes(w));
-          if (matches) {
-            results.push({
-              company: board,
-              jobId: String(job.id),
-              title: job.title || keyword,
-              location: job.location?.name || '',
-              url: `https://boards.greenhouse.io/${board}/jobs/${job.id}`,
+          if (kwWords.some(w => title.includes(w) || content.includes(w))) {
+            matched.push({
+              company: board, jobId: String(job.id), title: job.title || keyword,
+              location: job.location?.name || '', url: `https://boards.greenhouse.io/${board}/jobs/${job.id}`,
               content: (job.content || '').slice(0, 2000),
             });
           }
         }
-      } catch { /* skip board */ }
+        return matched;
+      } catch { return []; }
+    };
+    const batches = await Promise.allSettled(BOARDS.map(fetchBoard));
+    for (const b of batches) {
+      if (b.status === 'fulfilled') results.push(...b.value);
+      if (results.length >= limit) break;
     }
     console.log(`[greenhouse-api] keyword="${keyword}" → ${results.length} jobs from ${BOARDS.length} boards`);
     return results;
@@ -181,29 +184,32 @@ export class PipelineOrchestrator {
     const results: Array<{ company: string; jobId: string; title: string; location: string; url: string; content: string }> = [];
     const kwWords = keyword.toLowerCase().split(/\s+/).filter(w => w.length > 2 && !['senior', 'junior', 'lead', 'staff', 'principal', 'the', 'and', 'for'].includes(w));
 
-    for (const site of SITES) {
-      if (results.length >= limit) break;
+    // Fetch all sites in parallel
+    const fetchSite = async (site: string) => {
       try {
         const resp = await fetch(`https://api.lever.co/v0/postings/${site}?mode=json`, { signal: AbortSignal.timeout(8000) });
-        if (!resp.ok) continue;
+        if (!resp.ok) return [];
         const postings = await resp.json();
+        const matched: typeof results = [];
         for (const p of (postings || [])) {
-          if (results.length >= limit) break;
           const title = (p.text || '').toLowerCase();
           const desc = (p.descriptionPlain || '').toLowerCase();
-          const matches = kwWords.some(w => title.includes(w) || desc.includes(w));
-          if (matches) {
-            results.push({
-              company: site,
-              jobId: p.id || '',
-              title: p.text || keyword,
+          if (kwWords.some(w => title.includes(w) || desc.includes(w))) {
+            matched.push({
+              company: site, jobId: p.id || '', title: p.text || keyword,
               location: p.categories?.location || '',
               url: p.hostedUrl || `https://jobs.lever.co/${site}/${p.id}`,
               content: (p.descriptionPlain || '').slice(0, 2000),
             });
           }
         }
-      } catch { /* skip site */ }
+        return matched;
+      } catch { return []; }
+    };
+    const batches = await Promise.allSettled(SITES.map(fetchSite));
+    for (const b of batches) {
+      if (b.status === 'fulfilled') results.push(...b.value);
+      if (results.length >= limit) break;
     }
     console.log(`[lever-api] keyword="${keyword}" → ${results.length} jobs from ${SITES.length} sites`);
     return results;
@@ -233,7 +239,7 @@ export class PipelineOrchestrator {
    * Run a full pipeline cycle for a team.
    * Called by the dispatch loop when a discovery task is dispatched.
    */
-  async runDiscoveryCycle(teamId: string): Promise<void> {
+  async runDiscoveryCycle(teamId: string): Promise<number> {
     // Pre-flight: search_keywords must exist (generated by keyword_generation task)
     const keywords = await this.getSearchKeywords(teamId);
     const hasEn = (keywords?.en_keywords?.length ?? 0) > 0;
@@ -241,7 +247,7 @@ export class PipelineOrchestrator {
     const hasCompanies = (keywords?.target_companies?.length ?? 0) > 0;
     if (!keywords || (!hasEn && !hasZh && !hasCompanies)) {
       console.log('[pipeline] No search_keywords for team, skipping discovery (waiting for keyword_generation)');
-      return;
+      return 0;
     }
 
     // Get team config
@@ -251,7 +257,7 @@ export class PipelineOrchestrator {
       .eq('id', teamId)
       .single();
 
-    if (!team) return;
+    if (!team) return 0;
 
     // Get connected platforms (include expiry and failure tracking)
     const { data: connections } = await this.db
@@ -260,7 +266,7 @@ export class PipelineOrchestrator {
       .eq('team_id', teamId)
       .eq('status', 'active');
 
-    if (!connections || connections.length === 0) return;
+    if (!connections || connections.length === 0) return 0;
 
     // Get platform definitions for connected platforms
     const platformIds = connections.map((c: { platform_id: string }) => c.platform_id);
@@ -269,9 +275,14 @@ export class PipelineOrchestrator {
       .select('*')
       .in('id', platformIds);
 
-    if (!platforms) return;
+    if (!platforms) return 0;
 
     // Run discovery per platform
+    // Count opportunities before and after to get total created
+    const { count: beforeCount } = await this.db
+      .from('opportunity').select('id', { count: 'exact', head: true })
+      .eq('team_id', teamId);
+
     console.log(`[pipeline] Platforms to discover: ${platforms.map((p: { code: string }) => p.code).join(', ')} (${platforms.length} total, ${connections.length} active connections)`);
     for (const platform of platforms) {
       const pipelineMode = platform.pipeline_mode as PipelineMode;
@@ -371,6 +382,15 @@ export class PipelineOrchestrator {
         }
       }
     }
+
+    // Count total new opportunities created this cycle
+    const { count: afterCount } = await this.db
+      .from('opportunity').select('id', { count: 'exact', head: true })
+      .eq('team_id', teamId);
+    const totalCreated = (afterCount || 0) - (beforeCount || 0);
+    console.log(`[pipeline] Discovery cycle complete: ${totalCreated} new opportunities created`);
+    await this.emitEvent(teamId, 'task_opportunity_discovery_completed', `岗位发现周期完成，新增 ${totalCreated} 个岗位`);
+    return totalCreated;
   }
 
   private async runGreenhouseDiscovery(
