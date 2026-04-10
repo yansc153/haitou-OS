@@ -883,74 +883,57 @@ export class PipelineOrchestrator {
 
     if (!opp || !baseline) return;
 
-    // Step 1: Fit evaluation
-    console.log(`[screening] Starting fit-evaluation for ${opp.company_name} — ${opp.job_title}`);
+    // Combined fit + recommendation in ONE AI call (was 3 calls × 60s = 3min, now 1 call × 60s)
+    console.log(`[screening] Evaluating ${opp.company_name} — ${opp.job_title}`);
+    const { data: team } = await this.db.from('team').select('strategy_mode').eq('id', teamId).single();
+
     const fitResult = await executeSkill('fit-evaluation', {
       profile_baseline: baseline,
       opportunity: { job_title: opp.job_title, company_name: opp.company_name, location_label: opp.location_label, job_description_text: opp.job_description_text },
       user_preferences: prefs || {},
+      strategy_mode: team?.strategy_mode || 'balanced',
+      include_recommendation: true,
     });
-    if (fitResult.success) await recordTokenUsage(this.db, teamId, fitResult.tokens_used.input, fitResult.tokens_used.output);
 
-    if (fitResult.success) {
-      await this.transitionOpportunityStage(opportunityId, OpportunityStage.Discovered, OpportunityStage.Screened);
-      await this.db
-        .from('opportunity')
-        .update({
-          fit_posture: mapFitPosture(fitResult.output.fit_posture as string),
-          fit_reason_tags: fitResult.output.fit_reason_tags,
-        })
-        .eq('id', opportunityId);
-    }
-
-    // Step 2: Conflict detection (skip if fit evaluation failed)
     if (!fitResult.success) {
-      console.log(`[pipeline] Fit evaluation failed for ${opp.job_title}, skipping remaining screening`);
+      console.log(`[screening] FAILED for ${opp.company_name} — ${opp.job_title}: ${fitResult.error}`);
       return;
     }
 
-    const conflictResult = await executeSkill('conflict-detection', {
-      profile_baseline: baseline,
-      opportunity: { job_title: opp.job_title, company_name: opp.company_name, location_label: opp.location_label, job_description_text: opp.job_description_text },
-      user_preferences: prefs || {},
-    });
-    if (conflictResult.success) await recordTokenUsage(this.db, teamId, conflictResult.tokens_used.input, conflictResult.tokens_used.output);
+    await recordTokenUsage(this.db, teamId, fitResult.tokens_used.input, fitResult.tokens_used.output);
 
-    // Step 3: Recommendation
-    const { data: team } = await this.db.from('team').select('strategy_mode').eq('id', teamId).single();
+    const output = fitResult.output as {
+      fit_posture: string; fit_reason_tags: string[]; dimension_scores: Record<string, number>;
+      recommendation?: string; recommendation_reason_tags?: string[]; next_step_hint?: string;
+    };
 
-    const recResult = await executeSkill('recommendation-generation', {
-      fit_evaluation: fitResult.output,
-      conflict_detection: conflictResult.success ? conflictResult.output : {},
-      opportunity: { job_title: opp.job_title, company_name: opp.company_name },
-      strategy_mode: team?.strategy_mode || 'balanced',
-    });
+    // Derive recommendation from fit if not included in output
+    const recommendation = output.recommendation ||
+      (output.fit_posture === 'strong_fit' || output.fit_posture === 'strong' ? 'advance' :
+       output.fit_posture === 'moderate_fit' || output.fit_posture === 'moderate' ? 'advance' : 'drop');
+    const recTags = output.recommendation_reason_tags || output.fit_reason_tags || [];
 
-    if (recResult.success) await recordTokenUsage(this.db, teamId, recResult.tokens_used.input, recResult.tokens_used.output);
+    console.log(`[screening] ${opp.company_name} — ${opp.job_title}: fit=${output.fit_posture}, rec=${recommendation}`);
 
-    if (recResult.success) {
-      const rec = recResult.output as { recommendation: string; recommendation_reason_tags: string[]; next_step_hint: string };
-      console.log(`[screening] ${opp.company_name} — ${opp.job_title}: fit=${(fitResult.output as {fit_posture:string}).fit_posture}, rec=${rec.recommendation}`);
-
-      await this.transitionOpportunityStage(opportunityId, OpportunityStage.Screened, OpportunityStage.Prioritized);
-      await this.db
-        .from('opportunity')
-        .update({
-          recommendation: rec.recommendation,
-          recommendation_reason_tags: rec.recommendation_reason_tags,
-          recommendation_next_step_hint: rec.next_step_hint,
-        })
-        .eq('id', opportunityId);
-
-      // Screening only evaluates — material generation and submission are separate tasks
-      // created by the dispatch loop decision tree based on stage/recommendation.
-    }
+    // Transition discovered → screened → prioritized in one go
+    await this.transitionOpportunityStage(opportunityId, OpportunityStage.Discovered, OpportunityStage.Screened);
+    await this.transitionOpportunityStage(opportunityId, OpportunityStage.Screened, OpportunityStage.Prioritized);
+    await this.db
+      .from('opportunity')
+      .update({
+        fit_posture: mapFitPosture(output.fit_posture),
+        fit_reason_tags: output.fit_reason_tags,
+        recommendation: recommendation,
+        recommendation_reason_tags: recTags,
+        recommendation_next_step_hint: output.next_step_hint || '',
+      })
+      .eq('id', opportunityId);
 
     // Create timeline event
     await this.db.from('timeline_event').insert({
       team_id: teamId,
       event_type: 'opportunity_screened',
-      summary_text: `已筛选 ${opp.company_name} 的「${opp.job_title}」— ${recResult.success ? REC_ZH_MAP[(recResult.output as { recommendation: string }).recommendation] || (recResult.output as { recommendation: string }).recommendation : '未知'}`,
+      summary_text: `已筛选 ${opp.company_name} 的「${opp.job_title}」— ${REC_ZH_MAP[recommendation] || recommendation}`,
       actor_type: 'agent',
       related_entity_type: 'opportunity',
       related_entity_id: opportunityId,
