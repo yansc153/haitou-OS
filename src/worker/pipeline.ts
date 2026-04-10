@@ -188,7 +188,7 @@ export class PipelineOrchestrator {
             matched.push({
               company: board, jobId: String(job.id), title: job.title || keyword,
               location: job.location?.name || '', url: `https://boards.greenhouse.io/${board}/jobs/${job.id}`,
-              content: (job.content || '').slice(0, 2000),
+              content: (job.content || '').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&').replace(/<[^>]*>/g,' ').replace(/\s{2,}/g,' ').slice(0, 2000),
             });
           }
         }

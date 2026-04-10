@@ -8,27 +8,26 @@ import { AnimatedContent } from '@/components/ui/animated-content';
 import { SpotlightCard } from '@/components/ui/spotlight-card';
 import { ResumePdf } from '@/components/pdf/resume-pdf';
 
-function stripHtml(html: string): string {
+function stripHtml(raw: string): string {
+  // Step 1: Decode HTML entities first (Greenhouse API returns &lt;h3&gt; not <h3>)
+  let html = raw
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&').replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ')
+    .replace(/&rsquo;/g, "'").replace(/&ldquo;|&rdquo;/g, '"')
+    .replace(/&mdash;/g, '—').replace(/&ndash;/g, '–').replace(/&bull;/g, '•');
+
+  // Step 2: Convert HTML structure to readable text
   return html
     .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/?(p|div|h[1-6])(\s[^>]*)?>/gi, '\n')
+    .replace(/<\/?(p|div)(\s[^>]*)?>/gi, '\n')
+    .replace(/<\/?(h[1-6])(\s[^>]*)?>/gi, '\n')
     .replace(/<li(\s[^>]*)?>/gi, '\n• ')
     .replace(/<\/li>/gi, '')
     .replace(/<\/?(ul|ol)(\s[^>]*)?>/gi, '\n')
-    .replace(/<(strong|b)(\s[^>]*)?>/gi, '').replace(/<\/(strong|b)>/gi, '')
-    .replace(/<(em|i)(\s[^>]*)?>/gi, '').replace(/<\/(em|i)>/gi, '')
+    .replace(/<(strong|b)(\s[^>]*)?>(.*?)<\/(strong|b)>/gi, '$3')
+    .replace(/<(em|i)(\s[^>]*)?>(.*?)<\/(em|i)>/gi, '$3')
     .replace(/<[^>]*>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&rsquo;/g, "'")
-    .replace(/&ldquo;|&rdquo;/g, '"')
-    .replace(/&mdash;/g, '—')
-    .replace(/&ndash;/g, '–')
-    .replace(/&bull;/g, '•')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
