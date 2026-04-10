@@ -133,21 +133,9 @@ export async function discoverBossJobs(params: {
       } catch (e) { console.warn('[boss] Card parse failed:', (e as Error).message); }
     }
 
-    // Load JD for top results (fewer than other platforms due to anti-scraping)
-    for (const job of jobs.slice(0, 3)) {
-      try {
-        await page.goto(job.job_description_url, { waitUntil: 'domcontentloaded', timeout: 20000 });
-        await randomDelay(DELAY.page[0], DELAY.page[1]);
-
-        if (await isSecurityChallenge(page)) {
-          console.warn('[boss] Security challenge on job detail, stopping JD fetch');
-          break;
-        }
-
-        const jd = await page.locator('.job-sec-text, .job-detail-section .text, .job-detail .detail-content').first().textContent();
-        job.job_description_text = jd?.trim() || '';
-      } catch (e) { console.warn('[boss] Detail fetch failed:', (e as Error).message); }
-    }
+    // Skip JD detail fetch — Boss is passthrough mode (chat-based, not form-based)
+    // Saves ~60s+ of timeouts when accessing from overseas
+    console.log(`[boss] Skipping JD detail fetch (passthrough mode, ${jobs.length} jobs)`);
 
     console.log(`[boss] Discovery complete: ${jobs.length} jobs found`);
     return jobs;

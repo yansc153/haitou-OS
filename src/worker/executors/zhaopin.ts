@@ -102,15 +102,9 @@ export async function discoverZhaopinJobs(params: {
       } catch (e) { console.warn('[zhaopin] Card parse failed:', (e as Error).message); }
     }
 
-    // Load JD text for top results
-    for (const job of jobs.slice(0, 5)) {
-      try {
-        await page.goto(job.job_description_url, { waitUntil: 'domcontentloaded', timeout: 15000 });
-        await randomDelay(DELAY.page[0], DELAY.page[1]);
-        const jd = await page.locator('.describtion__detail-content, .job-detail__content, .pos-ul').first().textContent();
-        job.job_description_text = jd?.trim() || '';
-      } catch (e) { console.warn('[zhaopin] Detail fetch failed:', (e as Error).message); }
-    }
+    // Skip JD detail fetch — passthrough mode doesn't need JD for material tailoring
+    // Saves ~75s of timeouts when accessing from overseas
+    console.log(`[zhaopin] Skipping JD detail fetch (passthrough mode, ${jobs.length} jobs)`);
 
     console.log(`[zhaopin] Discovery complete: ${jobs.length} jobs found`);
     return jobs;

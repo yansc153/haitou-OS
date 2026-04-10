@@ -91,15 +91,8 @@ export async function discoverLiepinJobs(params: {
       } catch (e) { console.warn('[liepin] Card parse failed:', (e as Error).message); }
     }
 
-    // Load JD for top results
-    for (const job of jobs.slice(0, 5)) {
-      try {
-        await page.goto(job.job_description_url, { waitUntil: 'domcontentloaded', timeout: 15000 });
-        await randomDelay(DELAY.page[0], DELAY.page[1]);
-        const jd = await page.locator('.job-intro-container, .job-description, .job-qualifications').first().textContent();
-        job.job_description_text = jd?.trim() || '';
-      } catch (e) { console.warn('[liepin] Detail fetch failed:', (e as Error).message); }
-    }
+    // Skip JD detail fetch — passthrough mode, saves ~75s of overseas timeouts
+    console.log(`[liepin] Skipping JD detail fetch (passthrough mode, ${jobs.length} jobs)`);
 
     console.log(`[liepin] Discovery complete: ${jobs.length} jobs found`);
     return jobs;
