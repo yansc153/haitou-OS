@@ -171,6 +171,9 @@ export default function OpportunitiesPage() {
   const [expandedSections, setExpandedSections] = useState<Set<number>>(new Set());
   const [copied, setCopied] = useState(false);
   const [rightDocMode, setRightDocMode] = useState<'diff' | 'clean'>('diff');
+  const [jdLang, setJdLang] = useState<'original' | 'zh'>('original');
+  const [translatedJd, setTranslatedJd] = useState<string | null>(null);
+  const [translating, setTranslating] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pdfRef = useRef<HTMLDivElement>(null);
 
@@ -201,6 +204,8 @@ export default function OpportunitiesPage() {
     setSelectedId(id);
     setDetailLoading(true);
     setExpandedSections(new Set());
+    setTranslatedJd(null);
+    setJdLang('original');
     try {
       const session = await getValidSession(supabase);
       if (!session) return;
@@ -482,8 +487,42 @@ export default function OpportunitiesPage() {
                           <span>职位描述 (JD)</span>
                           <span className="text-[10px] group-open:rotate-90 transition-transform">▶</span>
                         </summary>
+                        {/* Language switch */}
+                        <div className="mt-2 flex items-center gap-2">
+                          <button
+                            onClick={() => { setJdLang('original'); }}
+                            className={`px-2.5 py-1 rounded-full text-[10px] font-bold transition-colors ${jdLang === 'original' ? 'bg-foreground text-background' : 'bg-muted text-muted-foreground hover:text-foreground'}`}
+                          >
+                            原文
+                          </button>
+                          <button
+                            onClick={async () => {
+                              setJdLang('zh');
+                              if (translatedJd) return;
+                              setTranslating(true);
+                              try {
+                                const session = await getValidSession(supabase);
+                                if (!session) return;
+                                const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/ai-translate`, {
+                                  method: 'POST',
+                                  headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ text: stripHtml(detail.opportunity.job_description_text || '').slice(0, 3000), target_lang: 'zh' }),
+                                });
+                                const json = await res.json();
+                                if (json.data?.translated_text) setTranslatedJd(json.data.translated_text);
+                                else setTranslatedJd('翻译失败，请稍后重试');
+                              } catch { setTranslatedJd('翻译服务暂不可用'); }
+                              setTranslating(false);
+                            }}
+                            className={`px-2.5 py-1 rounded-full text-[10px] font-bold transition-colors ${jdLang === 'zh' ? 'bg-foreground text-background' : 'bg-muted text-muted-foreground hover:text-foreground'}`}
+                          >
+                            {translating ? '翻译中...' : '中文'}
+                          </button>
+                        </div>
                         <div className="mt-3 surface-card rounded-xl p-5 max-h-[400px] overflow-y-auto">
-                          <p className="text-sm text-muted-foreground leading-relaxed whitespace-pre-wrap">{stripHtml(detail.opportunity.job_description_text)}</p>
+                          <p className="text-sm text-muted-foreground leading-relaxed whitespace-pre-wrap">
+                            {jdLang === 'zh' && translatedJd ? translatedJd : stripHtml(detail.opportunity.job_description_text)}
+                          </p>
                         </div>
                       </details>
                     </div>
