@@ -249,6 +249,20 @@ export default function TeamHomePage() {
             });
           }
           setAgentLogs(seedLogs);
+
+          // Seed typing indicators from recent events (within 90s)
+          const now = Date.now();
+          const seedTyping: Record<string, number> = {};
+          for (const item of (json.data.live_feed || []).slice(0, 15)) {
+            if (item.event_type === 'system_heartbeat' || item.event_type === 'team_started' || item.event_type === 'team_paused') continue;
+            const role = evtToRole[item.event_type];
+            if (!role || seedTyping[role]) continue;
+            const evtTime = new Date(item.occurred_at).getTime();
+            if (now - evtTime < 90_000) {
+              seedTyping[role] = evtTime;
+            }
+          }
+          if (Object.keys(seedTyping).length > 0) setTypingAgents(seedTyping);
         }
 
         // Check for expiring platform sessions
