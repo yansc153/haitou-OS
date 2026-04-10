@@ -347,7 +347,7 @@ export default function TeamHomePage() {
         }
         setTypingAgents(newTyping);
       } catch { /* silent — next poll will retry */ }
-    }, 10_000);
+    }, 3_000);
     return () => clearInterval(interval);
   }, [data?.team?.id, data?.team?.runtime_status, supabase]);
 
