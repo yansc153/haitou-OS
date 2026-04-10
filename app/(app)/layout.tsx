@@ -8,6 +8,7 @@ import { getValidSession } from '@/lib/hooks/use-api';
 import { cn } from '@/lib/utils';
 import { RuntimeContext, type RuntimeState } from '@/lib/hooks/use-runtime';
 import { useTeamStatus } from '@/lib/hooks/use-realtime';
+import { ToastProvider } from '@/components/ui/toast';
 
 const NAV_ITEMS = [
   { href: '/home', label: '团队主页' },
@@ -95,6 +96,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <RuntimeContext.Provider value={{ runtime, toggleRuntime }}>
+    <ToastProvider>
       <div className="min-h-screen bg-background">
         <header className="sticky top-0 z-50 bg-background/90 backdrop-blur-md">
           <div className="px-10 h-14 flex items-center justify-between">
@@ -146,8 +148,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           <div className="h-px bg-border/20" />
         </header>
 
-        <main className="px-10 py-8 max-w-[1400px] mx-auto">{children}</main>
+        <main className="px-4 sm:px-6 lg:px-10 py-8 max-w-[1400px] mx-auto">{children}</main>
       </div>
+    </ToastProvider>
     </RuntimeContext.Provider>
   );
 }
