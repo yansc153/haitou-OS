@@ -141,7 +141,8 @@ export class PipelineOrchestrator {
       'coinbase', 'kraken', 'chainalysis', 'consensys', 'alchemy-2', 'dapper', 'polygon-labs',
       'gitlabinc', 'hashicorp', 'grafana-labs', 'elastic', 'twilio', 'sendgrid'];
     const results: Array<{ company: string; jobId: string; title: string; location: string; url: string; content: string }> = [];
-    const kw = keyword.toLowerCase();
+    // Split keyword into meaningful words for broader matching
+    const kwWords = keyword.toLowerCase().split(/\s+/).filter(w => w.length > 2 && !['senior', 'junior', 'lead', 'staff', 'principal', 'the', 'and', 'for'].includes(w));
 
     for (const board of BOARDS) {
       if (results.length >= limit) break;
@@ -153,7 +154,9 @@ export class PipelineOrchestrator {
           if (results.length >= limit) break;
           const title = (job.title || '').toLowerCase();
           const content = (job.content || '').toLowerCase();
-          if (title.includes(kw) || content.includes(kw)) {
+          // Match if ANY significant keyword word appears in title or content
+          const matches = kwWords.some(w => title.includes(w) || content.includes(w));
+          if (matches) {
             results.push({
               company: board,
               jobId: String(job.id),
@@ -176,7 +179,7 @@ export class PipelineOrchestrator {
       'blockfi', 'solana-labs', 'aptos-labs', 'sui', 'near', 'layerzero-labs', 'eigenlayer',
       'aave', 'compound-2', 'uniswap', 'makerdao', 'lido', 'starkware-industries'];
     const results: Array<{ company: string; jobId: string; title: string; location: string; url: string; content: string }> = [];
-    const kw = keyword.toLowerCase();
+    const kwWords = keyword.toLowerCase().split(/\s+/).filter(w => w.length > 2 && !['senior', 'junior', 'lead', 'staff', 'principal', 'the', 'and', 'for'].includes(w));
 
     for (const site of SITES) {
       if (results.length >= limit) break;
@@ -188,7 +191,8 @@ export class PipelineOrchestrator {
           if (results.length >= limit) break;
           const title = (p.text || '').toLowerCase();
           const desc = (p.descriptionPlain || '').toLowerCase();
-          if (title.includes(kw) || desc.includes(kw)) {
+          const matches = kwWords.some(w => title.includes(w) || desc.includes(w));
+          if (matches) {
             results.push({
               company: site,
               jobId: p.id || '',
@@ -527,7 +531,8 @@ export class PipelineOrchestrator {
       .select('preferred_locations')
       .eq('team_id', teamId)
       .single();
-    const preferredLocations = (prefs?.preferred_locations as string[]) || [];
+    const rawLoc = prefs?.preferred_locations;
+    const preferredLocations = Array.isArray(rawLoc) ? rawLoc : typeof rawLoc === 'string' && rawLoc ? rawLoc.split(',').map((s: string) => s.trim()) : [];
 
     // Rotate: pick 3 keywords, search each individually for broader coverage
     const keywordList = searchKw.zh_keywords.sort(() => Math.random() - 0.5).slice(0, 3);
@@ -606,7 +611,8 @@ export class PipelineOrchestrator {
       .select('preferred_locations')
       .eq('team_id', teamId)
       .single();
-    const bossLocations = (bossPrefs?.preferred_locations as string[]) || [];
+    const rawBossLoc = bossPrefs?.preferred_locations;
+    const bossLocations = Array.isArray(rawBossLoc) ? rawBossLoc : typeof rawBossLoc === 'string' && rawBossLoc ? rawBossLoc.split(',').map((s: string) => s.trim()) : [];
 
     const keywordList = searchKw.zh_keywords.sort(() => Math.random() - 0.5).slice(0, 3);
     console.log(`[pipeline] boss_zhipin: AI keywords=${keywordList.join(',')}, locations=${bossLocations.join(',')}`);
