@@ -361,6 +361,45 @@ export default function TeamHomePage() {
   const isTeamActive = data?.team?.runtime_status === 'active';
   const agents: AgentData[] = data?.agents || [];
 
+  // Track which agents are "typing" — had an event in the last 90 seconds
+  const [typingAgents, setTypingAgents] = useState<Record<string, number>>({});
+  // When a new event comes in, mark that agent as typing
+  useEffect(() => {
+    if (liveFeedItems.length === 0) return;
+    const latest = liveFeedItems[0];
+    if (!latest) return;
+    const evtToRole: Record<string, string> = {
+      resume_analysis_started: 'profile_intelligence', resume_analysis_completed: 'profile_intelligence',
+      keyword_generated: 'profile_intelligence', task_keyword_generation_completed: 'profile_intelligence',
+      platform_search_started: 'opportunity_research', platform_search_completed: 'opportunity_research',
+      task_opportunity_discovery_completed: 'opportunity_research',
+      screening_started: 'matching_review', opportunity_screened: 'matching_review', task_screening_completed: 'matching_review',
+      material_started: 'materials_advisor', material_completed: 'materials_advisor', task_material_generation_completed: 'materials_advisor',
+      submission_started: 'application_executor', submission_success: 'application_executor', submission_failed: 'application_executor',
+      task_submission_completed: 'application_executor', boss_greeting_sent: 'application_executor',
+      reply_detected: 'relationship_manager', task_reply_processing_completed: 'relationship_manager',
+      dispatch_assign: 'orchestrator', task_assigned: 'orchestrator', team_started: 'orchestrator',
+    };
+    const role = evtToRole[latest.event_type] || null;
+    if (!role) return;
+    setTypingAgents(prev => ({ ...prev, [role]: Date.now() }));
+  }, [liveFeedItems]);
+
+  // Clear stale typing indicators every 5 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTypingAgents(prev => {
+        const now = Date.now();
+        const next: Record<string, number> = {};
+        for (const [role, ts] of Object.entries(prev)) {
+          if (now - ts < 90_000) next[role] = ts;
+        }
+        return Object.keys(next).length === Object.keys(prev).length ? prev : next;
+      });
+    }, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
   // Merge realtime items with initial feed, dedup by id, filter out heartbeats
   const initialFeed = data?.live_feed || [];
   const seenIds = new Set(liveFeedItems.map(i => i.id));
@@ -552,6 +591,27 @@ export default function TeamHomePage() {
               查看全部 →
             </Link>
           </div>
+
+          {/* Typing indicator */}
+          {(() => {
+            const now = Date.now();
+            const active = Object.entries(typingAgents)
+              .filter(([, ts]) => now - ts < 90_000)
+              .map(([role]) => AGENT_ROLE_ZH[role] || role);
+            if (active.length === 0 || !isTeamActive) return null;
+            return (
+              <div className="px-5 py-2.5 border-b border-border/5 flex items-center gap-2">
+                <div className="flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-status-active animate-bounce" style={{ animationDelay: '0ms' }} />
+                  <span className="w-1.5 h-1.5 rounded-full bg-status-active animate-bounce" style={{ animationDelay: '150ms' }} />
+                  <span className="w-1.5 h-1.5 rounded-full bg-status-active animate-bounce" style={{ animationDelay: '300ms' }} />
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  <span className="font-bold text-foreground/70">{active.join('、')}</span> 正在工作中...
+                </span>
+              </div>
+            );
+          })()}
 
           {/* Chat body */}
           <div className="flex-1 overflow-y-auto p-5 space-y-4">
