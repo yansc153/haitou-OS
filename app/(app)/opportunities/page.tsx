@@ -11,13 +11,24 @@ import { ResumePdf } from '@/components/pdf/resume-pdf';
 function stripHtml(html: string): string {
   return html
     .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/?(p|div|h[1-6]|li)>/gi, '\n')
-    .replace(/<\/?ul>/gi, '\n')
+    .replace(/<\/?(p|div|h[1-6])(\s[^>]*)?>/gi, '\n')
+    .replace(/<li(\s[^>]*)?>/gi, '\n• ')
+    .replace(/<\/li>/gi, '')
+    .replace(/<\/?(ul|ol)(\s[^>]*)?>/gi, '\n')
+    .replace(/<(strong|b)(\s[^>]*)?>/gi, '').replace(/<\/(strong|b)>/gi, '')
+    .replace(/<(em|i)(\s[^>]*)?>/gi, '').replace(/<\/(em|i)>/gi, '')
     .replace(/<[^>]*>/g, '')
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&rsquo;/g, "'")
+    .replace(/&ldquo;|&rdquo;/g, '"')
+    .replace(/&mdash;/g, '—')
+    .replace(/&ndash;/g, '–')
+    .replace(/&bull;/g, '•')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
@@ -300,10 +311,17 @@ export default function OpportunitiesPage() {
               <span className="text-xs text-muted-foreground">{opps.length} 个机会</span>
             </div>
             <div ref={scrollRef} className="flex gap-3 overflow-x-auto pb-3 -mx-2 px-2 scrollbar-thin">
-              {opps.map((opp, i) => {
+              {[...opps].sort((a, b) => {
+                // Priority: material_ready/submitted first, then by stage progress, then newest
+                const stageWeight: Record<string, number> = { submitted: 5, contact_started: 5, material_ready: 4, prioritized: 3, screened: 2, discovered: 1 };
+                const wA = stageWeight[a.stage] || 0, wB = stageWeight[b.stage] || 0;
+                if (wA !== wB) return wB - wA;
+                return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+              }).map((opp, i) => {
                 const isSelected = opp.id === selectedId;
                 const fit = FIT_ZH[opp.fit_posture || ''];
-                const hasMaterials = opp.stage === 'submitted' || opp.stage === 'contact_started' || opp.stage === 'prioritized';
+                // Only show "已精修" when materials actually exist (material_ready or submitted)
+                const hasMaterials = opp.stage === 'material_ready' || opp.stage === 'submitted' || opp.stage === 'contact_started';
                 return (
                   <AnimatedContent key={opp.id} delay={i * 0.03}>
                     <div
@@ -327,8 +345,13 @@ export default function OpportunitiesPage() {
                       <div className="flex items-center gap-1.5 flex-wrap">
                         {fit && <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold ${fit.cls}`}>{fit.label}</span>}
                         {hasMaterials && (
-                          <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold" style={{ background: 'hsl(var(--secondary) / 0.1)', color: 'hsl(var(--secondary))' }}>
-                            已精修
+                          <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-status-active/10 text-status-active">
+                            {opp.stage === 'submitted' || opp.stage === 'contact_started' ? '已投递' : '材料就绪'}
+                          </span>
+                        )}
+                        {opp.recommendation === 'advance' && !hasMaterials && (
+                          <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-status-warning/10 text-status-warning">
+                            推荐投递
                           </span>
                         )}
                       </div>
@@ -455,7 +478,7 @@ export default function OpportunitiesPage() {
                   {/* JD Content */}
                   {detail.opportunity.job_description_text && (
                     <div className="mb-6">
-                      <details className="group">
+                      <details className="group" open>
                         <summary className="cursor-pointer text-xs font-label uppercase tracking-widest text-muted-foreground hover:text-foreground transition-colors flex items-center gap-2">
                           <span>职位描述 (JD)</span>
                           <span className="text-[10px] group-open:rotate-90 transition-transform">▶</span>
