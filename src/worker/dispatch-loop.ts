@@ -326,42 +326,48 @@ export class DispatchLoop {
       }
     }
 
-    // Gate 8: Reply processing + follow-ups
-    const { count: activeConversations } = await this.db
+    // Gate 8: Reply processing — create one task per active conversation opportunity
+    const { data: activeConvOpps } = await this.db
       .from('opportunity')
-      .select('id', { count: 'exact', head: true })
+      .select('id')
       .eq('team_id', teamId)
-      .in('stage', ['contact_started', 'followup_active', 'positive_progression']);
+      .in('stage', ['contact_started', 'followup_active', 'positive_progression'])
+      .limit(5);
 
-    if (activeConversations && activeConversations > 0) {
-      if (await this.noActiveTask(teamId, 'reply_processing')) {
-        const agentId = agentMap.get('relationship_manager');
-        if (agentId) {
-          await this.createTask(teamId, agentId, 'reply_processing', 'opportunity_progression', 'high',
-            `reply-poll:${teamId}:${Date.now()}`);
-          console.log(`[decide] Gate 8: 招聘关系经理 -> reply_processing for ${activeConversations} conversations`);
-          return;
+    if (activeConvOpps && activeConvOpps.length > 0) {
+      for (const opp of activeConvOpps) {
+        if (await this.noActiveTaskForEntity(teamId, 'reply_processing', opp.id)) {
+          const agentId = agentMap.get('relationship_manager');
+          if (agentId) {
+            await this.createTask(teamId, agentId, 'reply_processing', 'opportunity_progression', 'high',
+              `reply-poll:${opp.id}:${Date.now()}`, opp.id, 'opportunity');
+            console.log(`[decide] Gate 8: 招聘关系经理 -> reply_processing for opp ${opp.id}`);
+            return;
+          }
         }
       }
     }
 
     // Follow-ups: submitted opportunities with no activity for 3+ days
     const threeDaysAgo = new Date(Date.now() - FOLLOWUP_STALE_DAYS * 24 * 60 * 60_000).toISOString();
-    const { count: staleSubmissions } = await this.db
+    const { data: staleOpps } = await this.db
       .from('opportunity')
-      .select('id', { count: 'exact', head: true })
+      .select('id')
       .eq('team_id', teamId)
       .in('stage', ['submitted', 'contact_started'])
-      .lt('stage_changed_at', threeDaysAgo);
+      .lt('stage_changed_at', threeDaysAgo)
+      .limit(5);
 
-    if (staleSubmissions && staleSubmissions > 0) {
-      if (await this.noActiveTask(teamId, 'follow_up')) {
-        const agentId = agentMap.get('relationship_manager');
-        if (agentId) {
-          await this.createTask(teamId, agentId, 'follow_up', 'opportunity_progression', 'medium',
-            `followup:${teamId}:${Date.now()}`);
-          console.log(`[decide] Gate 8b: 招聘关系经理 -> follow_up for ${staleSubmissions} stale submissions`);
-          return;
+    if (staleOpps && staleOpps.length > 0) {
+      for (const opp of staleOpps) {
+        if (await this.noActiveTaskForEntity(teamId, 'follow_up', opp.id)) {
+          const agentId = agentMap.get('relationship_manager');
+          if (agentId) {
+            await this.createTask(teamId, agentId, 'follow_up', 'opportunity_progression', 'medium',
+              `followup:${opp.id}:${Date.now()}`, opp.id, 'opportunity');
+            console.log(`[decide] Gate 8b: 招聘关系经理 -> follow_up for opp ${opp.id}`);
+            return;
+          }
         }
       }
     }

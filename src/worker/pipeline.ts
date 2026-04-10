@@ -771,7 +771,7 @@ export class PipelineOrchestrator {
     }
 
     // Compose greeting message via skill
-    const greetResult = await executeSkill('boss-greeting-compose', {
+    const greetResult = await executeSkill('first-contact-drafting', {
       opportunity: {
         job_title: opportunity.job_title,
         company_name: opportunity.company_name,

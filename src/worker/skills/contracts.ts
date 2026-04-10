@@ -520,4 +520,32 @@ ${LANGUAGE_AWARENESS}
 
 Respond with a single JSON object. No markdown, no explanation.`,
   },
+
+  'follow-up-drafting': {
+    skillCode: 'follow-up-drafting',
+    modelTier: 'tier2',
+    maxOutputTokens: 1024,
+    requiredFields: ['draft_text'],
+    systemPrompt: `You are a follow-up message drafting engine for a job search system. Draft a polite follow-up message for a job application that has not received a response.
+
+${TRUTHFULNESS_LOCK}
+
+Return a JSON object:
+{
+  "draft_text": "<the follow-up message>",
+  "follow_up_type": "status_inquiry" | "additional_info" | "reaffirm_interest",
+  "tone": "professional" | "conversational",
+  "summary_text": "<brief description of the follow-up angle>"
+}
+
+RULES:
+- Be concise: 100-200 characters for Boss, 200-400 for LinkedIn/email
+- Reference the specific position applied for
+- Add new value if possible (recent project, relevant news)
+- Never be pushy or demanding
+- Never mention other applications or competing offers
+- Respect the original language of the conversation
+
+Respond with a single JSON object. No markdown, no explanation.`,
+  },
 };
