@@ -114,6 +114,15 @@ export class DispatchLoop {
   // ================================================================
 
   private async decideNextAction(teamId: string, agentMap: Map<string, string>): Promise<void> {
+    // Respect concurrency limit
+    const { count: runningCount } = await this.db
+      .from('agent_task')
+      .select('id', { count: 'exact', head: true })
+      .eq('team_id', teamId)
+      .eq('status', 'running');
+    let taskBudget = MAX_CONCURRENT_TASKS_PER_TEAM - (runningCount || 0);
+    if (taskBudget <= 0) return;
+
     // Read team strategy_mode for dynamic intervals and thresholds
     const { data: teamRow } = await this.db.from('team').select('strategy_mode').eq('id', teamId).single();
     const strategyMode = (teamRow?.strategy_mode as string) || 'balanced';
@@ -165,143 +174,63 @@ export class DispatchLoop {
       return; // Wait for generate_keywords to complete
     }
 
-    // Gate 3: Discovery (strategy-dynamic interval + zero-result backoff)
-    const baseInterval = getDiscoveryInterval(strategyMode);
-    const backoffState = this.discoveryBackoff.get(teamId) || { zeroCount: 0, nextDiscoveryAfter: 0 };
-    const effectiveInterval = Math.min(baseInterval * Math.pow(2, backoffState.zeroCount), 24 * 60 * 60_000);
-    const now = Date.now();
+    // ── Priority order: reply > first_contact > submission > material > screening > discovery ──
+    // Multi-task per cycle: create up to taskBudget tasks, no early returns except Gate 1/2
 
-    // Respect backoff: skip if next discovery time hasn't arrived
-    if (backoffState.nextDiscoveryAfter > now) {
-      // Skip discovery, fall through to other gates
-    } else {
-      const since = new Date(now - effectiveInterval).toISOString();
-      const { count: recentDiscovery } = await this.db
-        .from('agent_task')
-        .select('id', { count: 'exact', head: true })
-        .eq('team_id', teamId)
-        .eq('task_type', 'opportunity_discovery')
-        .gte('created_at', since);
-
-      if (!recentDiscovery || recentDiscovery === 0) {
-        if (await this.noActiveTask(teamId, 'opportunity_discovery')) {
-          const agentId = agentMap.get('opportunity_research') || agentMap.get('orchestrator');
-          if (agentId) {
-            await this.insertDispatchEvent(teamId, '岗位研究员', `开始第 ${backoffState.zeroCount > 0 ? backoffState.zeroCount + 1 : 1} 轮岗位发现 (${strategyMode}模式)`);
-            await this.createTask(teamId, agentId, 'opportunity_discovery', 'opportunity_generation', 'medium',
-              `discovery:${teamId}:${Date.now()}`);
-            console.log(`[decide] Gate 3: 岗位研究员 -> discovery for team ${teamId} (interval=${effectiveInterval}ms, backoff=${backoffState.zeroCount})`);
-          }
-          return;
-        }
-      }
-    }
-
-    // Gate 4: Screening (discovered opportunities waiting)
-    const { count: unscreened } = await this.db
+    // Gate 8: Reply processing (highest priority — recruiter is waiting)
+    const { data: activeConvOpps } = await this.db
       .from('opportunity')
-      .select('id', { count: 'exact', head: true })
+      .select('id')
       .eq('team_id', teamId)
-      .eq('stage', 'discovered');
+      .in('stage', ['contact_started', 'followup_active', 'positive_progression'])
+      .limit(5);
 
-    if (unscreened && unscreened > 0) {
-      if (await this.noActiveTask(teamId, 'screening')) {
-        const agentId = agentMap.get('matching_review');
-        if (agentId) {
-          await this.createTask(teamId, agentId, 'screening', 'opportunity_generation', 'medium',
-            `screening:${teamId}:${Date.now()}`);
-          console.log(`[decide] Gate 4: 匹配审核员 -> screening ${unscreened} opps for team ${teamId}`);
+    if (activeConvOpps && activeConvOpps.length > 0) {
+      for (const opp of activeConvOpps) {
+        if (await this.noActiveTaskForEntity(teamId, 'reply_processing', opp.id)) {
+          const agentId = agentMap.get('relationship_manager');
+          if (agentId) {
+            await this.createTask(teamId, agentId, 'reply_processing', 'opportunity_progression', 'high',
+              `reply-poll:${opp.id}:${Date.now()}`, opp.id, 'opportunity');
+            console.log(`[decide] Gate 8: 招聘关系经理 -> reply_processing for opp ${opp.id}`);
+            if (--taskBudget <= 0) return;
+          }
         }
-        return;
       }
     }
 
-    // Gate 5: Material generation (advance + full_tailored + no materials)
+    // Gate 8b: Follow-ups (3+ days stale)
+    const threeDaysAgo = new Date(Date.now() - FOLLOWUP_STALE_DAYS * 24 * 60 * 60_000).toISOString();
+    const { data: staleOpps } = await this.db
+      .from('opportunity')
+      .select('id')
+      .eq('team_id', teamId)
+      .in('stage', ['submitted', 'contact_started'])
+      .lt('stage_changed_at', threeDaysAgo)
+      .limit(5);
+
+    if (staleOpps && staleOpps.length > 0) {
+      for (const opp of staleOpps) {
+        if (await this.noActiveTaskForEntity(teamId, 'follow_up', opp.id)) {
+          const agentId = agentMap.get('relationship_manager');
+          if (agentId) {
+            await this.createTask(teamId, agentId, 'follow_up', 'opportunity_progression', 'medium',
+              `followup:${opp.id}:${Date.now()}`, opp.id, 'opportunity');
+            console.log(`[decide] Gate 8b: 招聘关系经理 -> follow_up for opp ${opp.id}`);
+            if (--taskBudget <= 0) return;
+          }
+        }
+      }
+    }
+
+    // Shared query for Gates 7, 6b, 5: advance opportunities
     const { data: advanceOpps } = await this.db
       .from('opportunity')
       .select('id, source_platform_id')
       .eq('team_id', teamId)
       .eq('stage', 'prioritized')
       .eq('recommendation', 'advance')
-      .limit(5);
-
-    if (advanceOpps && advanceOpps.length > 0) {
-      for (const opp of advanceOpps) {
-        // Check pipeline mode: only full_tailored needs materials
-        const { data: plat } = await this.db
-          .from('platform_definition')
-          .select('pipeline_mode, code')
-          .eq('id', opp.source_platform_id)
-          .single();
-
-        // Passthrough platforms (Chinese) and Boss skip materials
-        if (plat?.pipeline_mode === 'passthrough' || plat?.code === 'boss_zhipin') continue;
-
-        // Check no materials exist
-        const { count: materialCount } = await this.db
-          .from('material')
-          .select('id', { count: 'exact', head: true })
-          .eq('opportunity_id', opp.id);
-        if (materialCount && materialCount > 0) continue;
-
-        // Check no pending task
-        if (await this.noActiveTaskForEntity(teamId, 'material_generation', opp.id)) {
-          const agentId = agentMap.get('materials_advisor') || agentMap.get('orchestrator');
-          if (agentId) {
-            await this.createTask(teamId, agentId, 'material_generation', 'opportunity_generation', 'medium',
-              `material:${opp.id}:${Date.now()}`, opp.id, 'opportunity');
-            console.log(`[decide] Gate 5: 简历顾问 -> material_generation for opp ${opp.id}`);
-          }
-          return;
-        }
-      }
-    }
-
-    // Gate 6: Submission (material_ready OR passthrough advance)
-    const { data: readyOpps } = await this.db
-      .from('opportunity')
-      .select('id')
-      .eq('team_id', teamId)
-      .eq('stage', 'material_ready')
-      .limit(5);
-
-    if (readyOpps && readyOpps.length > 0) {
-      for (const opp of readyOpps) {
-        if (await this.noActiveTaskForEntity(teamId, 'submission', opp.id)) {
-          const agentId = agentMap.get('application_executor') || agentMap.get('orchestrator');
-          if (agentId) {
-            await this.createTask(teamId, agentId, 'submission', 'opportunity_generation', 'high',
-              `submission:${opp.id}:${Date.now()}`, opp.id, 'opportunity');
-            console.log(`[decide] Gate 6: 投递专员 -> submission for opp ${opp.id}`);
-          }
-          return;
-        }
-      }
-    }
-
-    // Also handle passthrough submissions: prioritized + advance + passthrough platform
-    if (advanceOpps && advanceOpps.length > 0) {
-      for (const opp of advanceOpps) {
-        const { data: plat } = await this.db
-          .from('platform_definition')
-          .select('pipeline_mode, code')
-          .eq('id', opp.source_platform_id)
-          .single();
-
-        // Only passthrough non-Boss platforms
-        if (plat?.pipeline_mode !== 'passthrough' || plat?.code === 'boss_zhipin') continue;
-
-        if (await this.noActiveTaskForEntity(teamId, 'submission', opp.id)) {
-          const agentId = agentMap.get('application_executor') || agentMap.get('orchestrator');
-          if (agentId) {
-            await this.createTask(teamId, agentId, 'submission', 'opportunity_generation', 'high',
-              `submission:${opp.id}:${Date.now()}`, opp.id, 'opportunity');
-            console.log(`[decide] Gate 6b: 投递专员 -> passthrough submission for opp ${opp.id}`);
-          }
-          return;
-        }
-      }
-    }
+      .limit(10);
 
     // Gate 7: First contact (Boss advance)
     if (advanceOpps && advanceOpps.length > 0) {
@@ -320,53 +249,128 @@ export class DispatchLoop {
             await this.createTask(teamId, agentId, 'first_contact', 'opportunity_generation', 'high',
               `first_contact:${opp.id}:${Date.now()}`, opp.id, 'opportunity');
             console.log(`[decide] Gate 7: 投递专员 -> first_contact (Boss) for opp ${opp.id}`);
-          }
-          return;
-        }
-      }
-    }
-
-    // Gate 8: Reply processing — create one task per active conversation opportunity
-    const { data: activeConvOpps } = await this.db
-      .from('opportunity')
-      .select('id')
-      .eq('team_id', teamId)
-      .in('stage', ['contact_started', 'followup_active', 'positive_progression'])
-      .limit(5);
-
-    if (activeConvOpps && activeConvOpps.length > 0) {
-      for (const opp of activeConvOpps) {
-        if (await this.noActiveTaskForEntity(teamId, 'reply_processing', opp.id)) {
-          const agentId = agentMap.get('relationship_manager');
-          if (agentId) {
-            await this.createTask(teamId, agentId, 'reply_processing', 'opportunity_progression', 'high',
-              `reply-poll:${opp.id}:${Date.now()}`, opp.id, 'opportunity');
-            console.log(`[decide] Gate 8: 招聘关系经理 -> reply_processing for opp ${opp.id}`);
-            return;
+            if (--taskBudget <= 0) return;
           }
         }
       }
     }
 
-    // Follow-ups: submitted opportunities with no activity for 3+ days
-    const threeDaysAgo = new Date(Date.now() - FOLLOWUP_STALE_DAYS * 24 * 60 * 60_000).toISOString();
-    const { data: staleOpps } = await this.db
+    // Gate 6: Submission (material_ready)
+    const { data: readyOpps } = await this.db
       .from('opportunity')
       .select('id')
       .eq('team_id', teamId)
-      .in('stage', ['submitted', 'contact_started'])
-      .lt('stage_changed_at', threeDaysAgo)
+      .eq('stage', 'material_ready')
       .limit(5);
 
-    if (staleOpps && staleOpps.length > 0) {
-      for (const opp of staleOpps) {
-        if (await this.noActiveTaskForEntity(teamId, 'follow_up', opp.id)) {
-          const agentId = agentMap.get('relationship_manager');
+    if (readyOpps && readyOpps.length > 0) {
+      for (const opp of readyOpps) {
+        if (await this.noActiveTaskForEntity(teamId, 'submission', opp.id)) {
+          const agentId = agentMap.get('application_executor') || agentMap.get('orchestrator');
           if (agentId) {
-            await this.createTask(teamId, agentId, 'follow_up', 'opportunity_progression', 'medium',
-              `followup:${opp.id}:${Date.now()}`, opp.id, 'opportunity');
-            console.log(`[decide] Gate 8b: 招聘关系经理 -> follow_up for opp ${opp.id}`);
-            return;
+            await this.createTask(teamId, agentId, 'submission', 'opportunity_generation', 'high',
+              `submission:${opp.id}:${Date.now()}`, opp.id, 'opportunity');
+            console.log(`[decide] Gate 6: 投递专员 -> submission for opp ${opp.id}`);
+            if (--taskBudget <= 0) return;
+          }
+        }
+      }
+    }
+
+    // Gate 6b: Passthrough submissions (Chinese platforms, non-Boss)
+    if (advanceOpps && advanceOpps.length > 0) {
+      for (const opp of advanceOpps) {
+        const { data: plat } = await this.db
+          .from('platform_definition')
+          .select('pipeline_mode, code')
+          .eq('id', opp.source_platform_id)
+          .single();
+
+        if (plat?.pipeline_mode !== 'passthrough' || plat?.code === 'boss_zhipin') continue;
+
+        if (await this.noActiveTaskForEntity(teamId, 'submission', opp.id)) {
+          const agentId = agentMap.get('application_executor') || agentMap.get('orchestrator');
+          if (agentId) {
+            await this.createTask(teamId, agentId, 'submission', 'opportunity_generation', 'high',
+              `submission:${opp.id}:${Date.now()}`, opp.id, 'opportunity');
+            console.log(`[decide] Gate 6b: 投递专员 -> passthrough submission for opp ${opp.id}`);
+            if (--taskBudget <= 0) return;
+          }
+        }
+      }
+    }
+
+    // Gate 5: Material generation (full_tailored non-Boss non-passthrough)
+    if (advanceOpps && advanceOpps.length > 0) {
+      for (const opp of advanceOpps) {
+        const { data: plat } = await this.db
+          .from('platform_definition')
+          .select('pipeline_mode, code')
+          .eq('id', opp.source_platform_id)
+          .single();
+
+        if (plat?.pipeline_mode === 'passthrough' || plat?.code === 'boss_zhipin') continue;
+
+        const { count: materialCount } = await this.db
+          .from('material')
+          .select('id', { count: 'exact', head: true })
+          .eq('opportunity_id', opp.id);
+        if (materialCount && materialCount > 0) continue;
+
+        if (await this.noActiveTaskForEntity(teamId, 'material_generation', opp.id)) {
+          const agentId = agentMap.get('materials_advisor') || agentMap.get('orchestrator');
+          if (agentId) {
+            await this.createTask(teamId, agentId, 'material_generation', 'opportunity_generation', 'medium',
+              `material:${opp.id}:${Date.now()}`, opp.id, 'opportunity');
+            console.log(`[decide] Gate 5: 简历顾问 -> material_generation for opp ${opp.id}`);
+            if (--taskBudget <= 0) return;
+          }
+        }
+      }
+    }
+
+    // Gate 4: Screening (discovered opportunities)
+    const { count: unscreened } = await this.db
+      .from('opportunity')
+      .select('id', { count: 'exact', head: true })
+      .eq('team_id', teamId)
+      .eq('stage', 'discovered');
+
+    if (unscreened && unscreened > 0) {
+      if (await this.noActiveTask(teamId, 'screening')) {
+        const agentId = agentMap.get('matching_review');
+        if (agentId) {
+          await this.createTask(teamId, agentId, 'screening', 'opportunity_generation', 'medium',
+            `screening:${teamId}:${Date.now()}`);
+          console.log(`[decide] Gate 4: 匹配审核员 -> screening ${unscreened} opps for team ${teamId}`);
+          if (--taskBudget <= 0) return;
+        }
+      }
+    }
+
+    // Gate 3: Discovery (lowest priority — process existing before finding new)
+    const baseInterval = getDiscoveryInterval(strategyMode);
+    const backoffState = this.discoveryBackoff.get(teamId) || { zeroCount: 0, nextDiscoveryAfter: 0 };
+    const effectiveInterval = Math.min(baseInterval * Math.pow(2, backoffState.zeroCount), 24 * 60 * 60_000);
+    const now = Date.now();
+
+    if (backoffState.nextDiscoveryAfter <= now) {
+      const since = new Date(now - effectiveInterval).toISOString();
+      const { count: recentDiscovery } = await this.db
+        .from('agent_task')
+        .select('id', { count: 'exact', head: true })
+        .eq('team_id', teamId)
+        .eq('task_type', 'opportunity_discovery')
+        .gte('created_at', since);
+
+      if (!recentDiscovery || recentDiscovery === 0) {
+        if (await this.noActiveTask(teamId, 'opportunity_discovery')) {
+          const agentId = agentMap.get('opportunity_research') || agentMap.get('orchestrator');
+          if (agentId) {
+            await this.insertDispatchEvent(teamId, '岗位研究员', `开始第 ${backoffState.zeroCount > 0 ? backoffState.zeroCount + 1 : 1} 轮岗位发现 (${strategyMode}模式)`);
+            await this.createTask(teamId, agentId, 'opportunity_discovery', 'opportunity_generation', 'medium',
+              `discovery:${teamId}:${Date.now()}`);
+            console.log(`[decide] Gate 3: 岗位研究员 -> discovery for team ${teamId} (interval=${effectiveInterval}ms, backoff=${backoffState.zeroCount})`);
           }
         }
       }

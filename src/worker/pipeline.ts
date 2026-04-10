@@ -573,11 +573,19 @@ export class PipelineOrchestrator {
       .eq('status', 'active')
       .single();
 
-    if (!conn?.session_token_ref) return;
+    if (!conn?.session_token_ref) {
+      console.warn(`[pipeline] ${platformCode}: no session_token_ref, skipping`);
+      await this.emitEvent(teamId, 'platform_search_skipped', `${platformNameZh}搜索跳过: 未连接平台`);
+      return;
+    }
 
     // Use AI-generated Chinese keywords
     const searchKw = await this.getSearchKeywords(teamId);
-    if (!searchKw || searchKw.zh_keywords.length === 0) return;
+    if (!searchKw || searchKw.zh_keywords.length === 0) {
+      console.warn(`[pipeline] ${platformCode}: no zh_keywords, skipping`);
+      await this.emitEvent(teamId, 'platform_search_skipped', `${platformNameZh}搜索跳过: 未生成中文关键词`);
+      return;
+    }
 
     // Read preferred_locations from user_preferences
     const { data: prefs } = await this.db
@@ -609,6 +617,9 @@ export class PipelineOrchestrator {
       } else if (platformCode === 'liepin') {
         batch = await discoverLiepinJobs({ sessionCookies: conn.session_token_ref, keywords: [kw], limit: 5, city: primaryCity });
       }
+      console.log(`[pipeline] ${platformCode}: keyword="${kw}" → ${batch.length} jobs`);
+      if (batch.length === 0) console.warn(`[pipeline] ${platformCode}: ZERO results for "${kw}"`);
+
       jobs.push(...batch);
     }
 
@@ -780,7 +791,7 @@ export class PipelineOrchestrator {
     });
 
     const greetingText = greetResult.success
-      ? ((greetResult.output as { greeting_text?: string }).greeting_text || `您好，我对贵司的「${opportunity.job_title}」岗位很感兴趣，希望能进一步了解。`)
+      ? ((greetResult.output as { draft_text?: string }).draft_text || `您好，我对贵司的「${opportunity.job_title}」岗位很感兴趣，希望能进一步了解。`)
       : `您好，我对贵司的「${opportunity.job_title}」岗位很感兴趣，希望能进一步了解。`;
 
     if (greetResult.success) {
