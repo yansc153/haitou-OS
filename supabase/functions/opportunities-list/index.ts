@@ -63,7 +63,7 @@ serve(async (req) => {
   if (hasMore) opportunities.pop();
 
   const nextCursor = hasMore && opportunities.length > 0
-    ? (opportunities[opportunities.length - 1] as Record<string, unknown>)[cursorField]
+    ? (opportunities[opportunities.length - 1] as Record<string, unknown>)[sortField]
     : null;
 
   // Map material_ready → prioritized for frontend
